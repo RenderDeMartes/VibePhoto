@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Packaging
+*.spec.bak
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.lnk
+
+# Vibe Photo runtime artifacts (catalogs, caches, logs live in user dirs,
+# but never commit any that land in-tree during local testing)
+*.vibephoto
+*.vibephoto-wal
+*.vibephoto-shm
+/cache/
+/logs/
+*.log
+
+# Third-party preset libraries (commercial / copyrighted). Keep them local for
+# testing only — never publish someone else's preset packs in this repository.
+/presets/
+*.lrtemplate
+*.xmp
+
+# Sample photos: never commit RAW files or large media you don't own. (README
+# screenshots under docs/images and the tiny synthetic test DNG are allowed below.)
+*.cr2
+*.cr3
+*.nef
+*.arw
+*.raf
+*.rw2
+*.orf
+*.pef
+*.dng
+!tests/data/synthetic.dng

@@ -1,0 +1,147 @@
+/*
+ * Vibe Photo — dark theme stylesheet.
+ *
+ * A neutral, low-glare dark theme tuned for colour-critical photo work: the
+ * editing surfaces use desaturated greys so they do not bias the eye when
+ * judging colour. Accent is a restrained blue used only for focus/selection.
+ *
+ * Colour tokens (keep in sync with theme.py PALETTE):
+ *   bg-app      #1e1f22   window background
+ *   bg-panel    #26282c   panels / docks
+ *   bg-elevated #2f3236   inputs, headers
+ *   border      #3a3d42
+ *   text        #e6e7e9
+ *   text-muted  #9a9da3
+ *   accent      #3d8bfd
+ */
+
+QWidget {
+    background-color: #1e1f22;
+    color: #e6e7e9;
+    font-size: 13px;
+}
+
+QMainWindow::separator {
+    background: #3a3d42;
+    width: 2px;
+    height: 2px;
+}
+
+/* Docks & panels ------------------------------------------------------- */
+QDockWidget {
+    background-color: #26282c;
+    titlebar-close-icon: none;
+    titlebar-normal-icon: none;
+}
+QDockWidget::title {
+    background: #2f3236;
+    padding: 6px 10px;
+    border-bottom: 1px solid #3a3d42;
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 1px;
+    color: #9a9da3;
+}
+
+/* Menus & toolbars ----------------------------------------------------- */
+QMenuBar {
+    background-color: #26282c;
+    border-bottom: 1px solid #3a3d42;
+}
+QMenuBar::item:selected { background: #3d8bfd; color: #ffffff; }
+QMenu {
+    background-color: #26282c;
+    border: 1px solid #3a3d42;
+}
+QMenu::item:selected { background: #3d8bfd; color: #ffffff; }
+
+QToolBar {
+    background: #26282c;
+    border: none;
+    spacing: 4px;
+    padding: 4px;
+}
+QToolButton {
+    background: transparent;
+    padding: 6px 12px;
+    border-radius: 4px;
+    color: #c8cace;
+}
+QToolButton:hover { background: #2f3236; }
+QToolButton:checked {
+    background: #3d8bfd;
+    color: #ffffff;
+}
+
+/* Inputs --------------------------------------------------------------- */
+QLineEdit, QSpinBox, QComboBox, QPlainTextEdit, QTextEdit {
+    background: #2f3236;
+    border: 1px solid #3a3d42;
+    border-radius: 4px;
+    padding: 4px 6px;
+    selection-background-color: #3d8bfd;
+}
+QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border: 1px solid #3d8bfd; }
+
+QSlider::groove:horizontal {
+    height: 4px; background: #3a3d42; border-radius: 2px;
+}
+QSlider::handle:horizontal {
+    width: 14px; margin: -6px 0; border-radius: 7px; background: #c8cace;
+}
+QSlider::handle:horizontal:hover { background: #ffffff; }
+
+/* Buttons (Develop panel: Load Preset / Reset) -------------------------- */
+QPushButton {
+    background: #2f3236;
+    border: 1px solid #3a3d42;
+    border-radius: 4px;
+    padding: 5px 10px;
+    color: #c8cace;
+}
+QPushButton:hover { background: #363a3f; border-color: #4a4e54; }
+QPushButton:pressed { background: #2a2d31; }
+
+QCheckBox { color: #c9ccd1; spacing: 6px; }
+QCheckBox::indicator {
+    width: 14px; height: 14px; border-radius: 3px;
+    border: 1px solid #4a4e54; background: #2f3236;
+}
+QCheckBox::indicator:checked { background: #3d8bfd; border-color: #3d8bfd; }
+
+/* Lists / trees -------------------------------------------------------- */
+QTreeView, QListView, QTableView {
+    background: #26282c;
+    border: none;
+    alternate-background-color: #2a2c30;
+    selection-background-color: #34557f;
+    selection-color: #ffffff;
+}
+QHeaderView::section {
+    background: #2f3236;
+    border: none;
+    border-bottom: 1px solid #3a3d42;
+    padding: 4px 8px;
+    color: #9a9da3;
+}
+
+/* Status bar ----------------------------------------------------------- */
+QStatusBar {
+    background: #26282c;
+    border-top: 1px solid #3a3d42;
+    color: #9a9da3;
+}
+QStatusBar QLabel { color: #9a9da3; }
+
+/* Scrollbars ----------------------------------------------------------- */
+QScrollBar:vertical { background: transparent; width: 12px; margin: 0; }
+QScrollBar::handle:vertical {
+    background: #3a3d42; min-height: 30px; border-radius: 6px;
+}
+QScrollBar::handle:vertical:hover { background: #4a4e54; }
+QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
+QScrollBar:horizontal { background: transparent; height: 12px; margin: 0; }
+QScrollBar::handle:horizontal {
+    background: #3a3d42; min-width: 30px; border-radius: 6px;
+}
+QScrollBar::handle:horizontal:hover { background: #4a4e54; }
