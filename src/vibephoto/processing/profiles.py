@@ -57,7 +57,9 @@ DEFAULT_PROFILE = "Neutral"
 def _contrast(rgb: Array, amount: float) -> Array:
     # Smooth S-curve around mid-grey; ``amount`` scales its strength.
     x = clip01(rgb)
-    curved = x + amount * (x - 0.5) * (1.0 - np.abs(2.0 * x - 1.0))
+    curved = np.asarray(
+        x + amount * (x - 0.5) * (1.0 - np.abs(2.0 * x - 1.0)), dtype=np.float32
+    )
     out: Array = clip01(curved)
     return out
 

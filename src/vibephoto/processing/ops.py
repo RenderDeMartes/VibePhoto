@@ -146,7 +146,8 @@ def parametric_curve(
                (highlights, 0.88, 0.12))
     for amount, center, width in regions:
         if amount != 0.0:
-            y = y + (amount / 100.0) * 0.22 * np.exp(-((x - center) ** 2) / (2 * width * width))
+            bump = (amount / 100.0) * 0.22 * np.exp(-((x - center) ** 2) / (2 * width * width))
+            y = np.asarray(y + bump, dtype=np.float32)
     y = np.maximum.accumulate(np.clip(y, 0.0, 1.0)).astype(np.float32)
     lut = np.clip(y, 0.0, 1.0).astype(np.float32)
     return apply_lut(rgb, lut)  # one gather over all three channels
@@ -305,7 +306,7 @@ def sharpen(
         threshold = masking / 100.0
         mask = np.clip((edge - threshold) / (1.0 - threshold + 1e-3), 0.0, 1.0)
         high = high * mask
-    return clip01(rgb + (amount / 100.0) * high[..., None])
+    return clip01(np.asarray(rgb + (amount / 100.0) * high[..., None], dtype=np.float32))
 
 
 def noise_reduction(rgb: Array, luminance_amount: float, color_amount: float) -> Array:
