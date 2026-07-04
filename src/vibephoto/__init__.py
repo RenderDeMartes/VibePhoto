@@ -19,4 +19,4 @@ APP_SLUG = "vibephoto"
 APP_AUTHOR = "Vibe Photo"
 
 #: Semantic version. Kept in sync with ``pyproject.toml``.
-__version__ = "0.1.1"
+__version__ = "0.1.2"
