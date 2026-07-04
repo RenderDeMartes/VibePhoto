@@ -105,6 +105,7 @@ class MainWindow(QMainWindow):
         self._library.auto_requested.connect(self._batch_auto)
         self._develop.paste_to_selected_requested.connect(self._paste_to_selected)
         self._develop.render_busy_changed.connect(self._set_busy)
+        self._develop.photo_nav_requested.connect(self._on_develop_nav)
         for module in (self._library, self._develop):
             self._modules[module.module_id] = module
             self._stack.addWidget(module)
@@ -250,6 +251,24 @@ class MainWindow(QMainWindow):
             self._develop.load_photo(photo)
         else:
             self._open_in_develop(photo)
+
+    def _on_develop_nav(self, direction: int) -> None:
+        """Left/Right in Develop: step to the previous/next photo in the filmstrip set."""
+        photos = self._library.current_photos()
+        if not photos:
+            return
+        current = self._develop.requested_photo
+        index = 0
+        if current is not None and current.id is not None:
+            ids = [photo.id for photo in photos]
+            if current.id in ids:
+                # Clamp at the ends (no wrap-around) — matches pro-editor behaviour.
+                index = max(0, min(len(photos) - 1, ids.index(current.id) + direction))
+                if photos[index].id == current.id:
+                    return  # already at the first/last photo
+        target = photos[index]
+        self._develop.load_photo(target)
+        self._filmstrip.select_photo(target)
 
     def _reload_filmstrip(self) -> None:
         # Mirror the Library's current (folder + rating filtered) set, so the

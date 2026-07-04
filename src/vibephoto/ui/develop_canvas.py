@@ -143,6 +143,10 @@ class DevelopCanvas(QWidget):
         self.setMinimumSize(360, 300)
         self.setStyleSheet("background:#0e0f11;")
         self.setMouseTracking(True)
+        # Focusable so clicking the image pulls focus off panel widgets — arrow
+        # keys then bubble to the module's photo navigation instead of nudging
+        # whichever slider was touched last.
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
 
     # -- image ------------------------------------------------------------- #
 

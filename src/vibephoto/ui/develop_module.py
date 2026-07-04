@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QImage, QKeySequence, QShortcut
+from PySide6.QtGui import QImage, QKeyEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -78,6 +78,9 @@ class DevelopModule(ModuleView):
     paste_to_selected_requested = Signal()
     #: True while a background full render is in flight (drives a status spinner).
     render_busy_changed = Signal(bool)
+    #: Left/Right arrow pressed: navigate to the previous (-1) / next (+1) photo.
+    #: The shell resolves the target from the filmstrip's current photo set.
+    photo_nav_requested = Signal(int)
 
     def __init__(self, app: Application, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -327,6 +330,7 @@ class DevelopModule(ModuleView):
         self._panel.white_balance.set_reference(payload.as_shot_kelvin or WB_REFERENCE_K)
         self._canvas.reset_view()
         self._title.setText(self._photo.filename)
+        self._canvas.setFocus()  # so Left/Right photo navigation works immediately
         self._render_full()
 
     def commit(self) -> None:
@@ -355,6 +359,25 @@ class DevelopModule(ModuleView):
     def current_photo(self) -> Photo | None:
         """The photo currently open for editing, if any."""
         return self._photo if self._renderer is not None else None
+
+    @property
+    def requested_photo(self) -> Photo | None:
+        """The photo open — or still being decoded — in the editor.
+
+        Unlike :attr:`current_photo` this is valid during an async load, so arrow
+        navigation keeps its place while photos stream in.
+        """
+        return self._photo
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        # Left/Right navigate the filmstrip — but only when they reach the module
+        # (a focused slider consumes arrows first, keeping keyboard nudge intact).
+        if event.key() == Qt.Key.Key_Right:
+            self.photo_nav_requested.emit(1)
+        elif event.key() == Qt.Key.Key_Left:
+            self.photo_nav_requested.emit(-1)
+        else:
+            super().keyPressEvent(event)
 
     # -- editing ------------------------------------------------------------ #
 

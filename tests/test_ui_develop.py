@@ -175,6 +175,33 @@ def test_undo_redo_walks_edit_history(qapp: QApplication, app_with_photo) -> Non
     assert module._state.exposure == 2.0
 
 
+def test_arrow_keys_request_photo_navigation(qapp: QApplication, app_with_photo) -> None:
+    # Left/Right reaching the module emit photo_nav_requested(-1 / +1); other keys don't.
+    from PySide6.QtCore import QEvent
+    from PySide6.QtCore import Qt as QtCore_Qt
+    from PySide6.QtGui import QKeyEvent
+
+    module = DevelopModule(app_with_photo)
+    _load(qapp, module, _first_photo(app_with_photo))
+    seen: list[int] = []
+    module.photo_nav_requested.connect(seen.append)
+    for key in (QtCore_Qt.Key.Key_Right, QtCore_Qt.Key.Key_Left, QtCore_Qt.Key.Key_A):
+        module.keyPressEvent(
+            QKeyEvent(QEvent.Type.KeyPress, key, QtCore_Qt.KeyboardModifier.NoModifier)
+        )
+    assert seen == [1, -1]
+
+
+def test_requested_photo_tracks_in_flight_load(qapp: QApplication, app_with_photo) -> None:
+    # requested_photo is valid even mid-decode, so navigation keeps its place.
+    module = DevelopModule(app_with_photo)
+    photo = _first_photo(app_with_photo)
+    module.load_photo(photo)  # async — renderer not ready yet
+    assert module.requested_photo is not None
+    assert module.requested_photo.id == photo.id
+    _load(qapp, module, photo)  # settle before teardown
+
+
 def test_rating_keys_set_and_clear(qapp: QApplication, app_with_photo) -> None:
     # 1-5 rate the open photo from the keyboard; 0 clears. Persisted to the catalog.
     module = DevelopModule(app_with_photo)
