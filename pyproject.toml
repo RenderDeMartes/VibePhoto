@@ -20,11 +20,6 @@ classifiers = [
     "Topic :: Multimedia :: Graphics :: Editors",
 ]
 
-[project.urls]
-Homepage = "https://github.com/RenderDeMartes/VibePhoto"
-Repository = "https://github.com/RenderDeMartes/VibePhoto"
-Issues = "https://github.com/RenderDeMartes/VibePhoto/issues"
-
 # Base runtime dependencies. These are pure-Python or ship pre-built wheels on
 # all three target platforms, so a plain `pip install -e .` always succeeds.
 # Heavyweight / native-build dependencies live in optional extras below so that
@@ -38,6 +33,11 @@ dependencies = [
     # ships wheels everywhere, so it stays a base dependency.
     "tifffile>=2024.1",
 ]
+
+[project.urls]
+Homepage = "https://github.com/RenderDeMartes/VibePhoto"
+Repository = "https://github.com/RenderDeMartes/VibePhoto"
+Issues = "https://github.com/RenderDeMartes/VibePhoto/issues"
 
 [project.optional-dependencies]
 # GUI layer. Kept optional so the catalog/processing engine can run headless
