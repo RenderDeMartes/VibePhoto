@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
+    QMessageBox,
     QPushButton,
     QStackedWidget,
     QVBoxLayout,
@@ -203,6 +204,11 @@ class LibraryModule(ModuleView):
         apply_preset_action = menu.addAction(f"Apply Preset… → {len(targets)} photo(s)")
         apply_preset_action.setEnabled(bool(targets))
         menu.addSeparator()
+        reset_action = menu.addAction(f"Reset to Original → {len(targets)} photo(s)")
+        reset_action.setEnabled(bool(targets))
+        reset_all_action = menu.addAction(f"Reset All to Original ({len(all_photos)})")
+        reset_all_action.setEnabled(bool(all_photos))
+        menu.addSeparator()
         copy_action = menu.addAction("Copy Settings")
         copy_action.setEnabled(photo is not None and photo.id is not None)
         paste_action = menu.addAction(f"Paste Settings → {len(targets)} photo(s)")
@@ -211,6 +217,10 @@ class LibraryModule(ModuleView):
         chosen = menu.exec(self._grid.mapToGlobal(pos))
         if chosen is apply_preset_action:
             self._apply_preset_to(targets)
+        elif chosen is reset_action:
+            self._reset_edits(targets)
+        elif chosen is reset_all_action:
+            self._reset_edits(all_photos, confirm=True)
         elif chosen is auto_action:
             self.auto_requested.emit(targets, "edit")
         elif chosen is auto_all_action:
@@ -233,6 +243,34 @@ class LibraryModule(ModuleView):
                     count += 1
             self._count_label.setText(f"Pasted settings to {count} photo(s)")
             self.settings_pasted.emit()
+
+    def _reset_edits(self, targets: list[Photo], *, confirm: bool = False) -> None:
+        """Reset every target photo's develop settings back to the original.
+
+        Non-destructive editing means "reset" is just storing an identity stack
+        (which deletes the edit file) — the image files are never touched.
+        """
+        if not targets:
+            return
+        if confirm:
+            answer = QMessageBox.question(
+                self,
+                "Reset All to Original",
+                f"Reset ALL edits on {len(targets)} photo(s) back to the original?\n\n"
+                "Crops, adjustments, layers, and masks are removed. "
+                "The image files themselves are not modified.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        count = 0
+        for target in targets:
+            if target.id is not None:
+                self._store.save(target.id, LayerStack.single())
+                count += 1
+        self._count_label.setText(f"Reset {count} photo(s) to original")
+        self.settings_pasted.emit()  # Develop reloads if it has one of these open
 
     def _apply_preset_to(self, targets: list[Photo]) -> None:
         """Apply a chosen preset to every target, on a new or the same layer."""

@@ -238,6 +238,24 @@ def test_apply_imported_preset_renders(qapp: QApplication, app_with_photo) -> No
     assert not module._canvas._after.isNull()
 
 
+def test_library_reset_edits_restores_original(qapp: QApplication, app_with_photo) -> None:
+    from vibephoto.processing.layers import LayerStack
+    from vibephoto.processing.store import DevelopStore
+
+    library = LibraryModule(app_with_photo)
+    library.reload()
+    photo = _first_photo(app_with_photo)
+    store = app_with_photo.resolve(DevelopStore)
+    store.save(photo.id, LayerStack.single(EditState(contrast=40.0)))
+    assert not store.load(photo.id).is_identity()
+
+    pasted: list[object] = []
+    library.settings_pasted.connect(lambda: pasted.append(True))
+    library._reset_edits([photo])
+    assert store.load(photo.id).is_identity()  # back to the original
+    assert pasted  # Develop is told to refresh
+
+
 def test_library_double_click_emits_and_selects(qapp: QApplication, app_with_photo) -> None:
     library = LibraryModule(app_with_photo)
     library.reload()
