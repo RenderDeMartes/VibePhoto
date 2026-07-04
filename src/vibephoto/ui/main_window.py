@@ -244,13 +244,27 @@ class MainWindow(QMainWindow):
         self._develop.load_photo(photo)
         self._filmstrip.select_photo(photo)
         self._switch_module(ModuleId.DEVELOP)
+        self._prefetch_neighbours(photo)
 
     def _on_filmstrip_clicked(self, photo: Photo) -> None:
         """A filmstrip frame was clicked: edit it if in Develop, else open it there."""
         if self._current_module is ModuleId.DEVELOP:
             self._develop.load_photo(photo)
+            self._prefetch_neighbours(photo)
         else:
             self._open_in_develop(photo)
+
+    def _prefetch_neighbours(self, photo: Photo) -> None:
+        """Warm the smart-preview cache for the photos either side of ``photo``,
+        so arrow-key browsing opens them near-instantly."""
+        photos = self._library.current_photos()
+        ids = [candidate.id for candidate in photos]
+        if photo.id is None or photo.id not in ids:
+            return
+        index = ids.index(photo.id)
+        for neighbour in (index + 1, index - 1):
+            if 0 <= neighbour < len(photos):
+                self._develop.prefetch_photo(photos[neighbour])
 
     def _on_develop_nav(self, direction: int) -> None:
         """Left/Right in Develop: step to the previous/next photo in the filmstrip set."""
@@ -269,6 +283,7 @@ class MainWindow(QMainWindow):
         target = photos[index]
         self._develop.load_photo(target)
         self._filmstrip.select_photo(target)
+        self._prefetch_neighbours(target)
 
     def _reload_filmstrip(self) -> None:
         # Mirror the Library's current (folder + rating filtered) set, so the

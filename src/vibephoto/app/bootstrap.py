@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 
 from vibephoto.app.application import Application, ApplicationContext
+from vibephoto.cache.previews import PreviewCache
 from vibephoto.cache.thumbnails import ThumbnailCache
 from vibephoto.catalog.indexer import IndexerService
 from vibephoto.catalog.service import CatalogService
@@ -113,6 +114,9 @@ def _register_services(container: Container) -> None:
             r.resolve(AppPaths), r.resolve(CacheSettings), r.resolve(RawService)
         ),
     )
+    # Smart previews: decoded RAW base buffers, so re-opening a photo in Develop
+    # skips the multi-second LibRaw decode.
+    container.register(PreviewCache)
     container.register(CatalogService)
     container.register(IndexerService)
     # Processing engine (Develop module): loader → engine, plus the edit store.

@@ -29,6 +29,8 @@ from PySide6.QtWidgets import (
 )
 
 from vibephoto.app.application import Application
+from vibephoto.cache.previews import PreviewCache
+from vibephoto.cache.thumbnails import ThumbnailCache
 from vibephoto.catalog.models import Photo
 from vibephoto.catalog.service import CatalogService
 from vibephoto.presets.library import PresetLibrary
@@ -92,6 +94,8 @@ class DevelopModule(ModuleView):
         self._clipboard = app.resolve(SettingsClipboard)
         self._last_edit = app.resolve(LastEdit)
         self._raw_service = app.resolve(RawService)
+        self._previews = app.resolve(PreviewCache)
+        self._thumbnails = app.resolve(ThumbnailCache)
         self._lens_store = LensProfileStore(app.paths.data_dir)
 
         self._photo: Photo | None = None
@@ -120,10 +124,16 @@ class DevelopModule(ModuleView):
         # (or dropped with) superseded render tasks, and vice versa.
         self._load_pool = QThreadPool(self)
         self._load_pool.setMaxThreadCount(1)
+        # Prefetch (filmstrip neighbours) decodes on its own thread so warming the
+        # smart-preview cache never delays the photo the user actually opened.
+        self._prefetch_pool = QThreadPool(self)
+        self._prefetch_pool.setMaxThreadCount(1)
+        self._prefetching: set[str] = set()
         self._render_signals = _RenderSignals()
         self._render_signals.done.connect(self._on_full_rendered)
         self._render_signals.loaded.connect(self._on_photo_loaded)
         self._render_signals.before_ready.connect(self._on_before_ready)
+        self._render_signals.prefetched.connect(self._on_prefetched)
         self._render_gen = 0
         self._load_gen = 0
         self._before_gen = 0
@@ -298,17 +308,37 @@ class DevelopModule(ModuleView):
         self._footer.set_rating(photo.rating)
         self._title.setText(f"{photo.filename} — loading…")
 
+        # Show *something* instantly: the grid thumbnail, blurry but immediate,
+        # replaced the moment the decoded preview lands.
+        self._show_placeholder(photo)
+
         self._load_gen += 1
+        # Arrow-key browsing queues loads faster than decodes finish — drop any
+        # still-queued stale load (and stale Before tasks; the generation bumps
+        # above already invalidated them) so the newest photo starts immediately.
+        self._load_pool.clear()
         task = _LoadTask(
             self._engine,
             self._raw_service,
+            self._previews,
             path,
-            photo.is_raw,
+            photo,
             self._stack.geometry.copy(),
             self._load_gen,
             self._render_signals,
         )
         self._load_pool.start(task)
+
+    def _show_placeholder(self, photo: Photo) -> None:
+        """Put the photo's thumbnail on the canvas while the real decode runs."""
+        if not photo.content_hash:
+            return
+        data = self._thumbnails.get_bytes(photo.content_hash)
+        if not data:
+            return
+        image = QImage.fromData(data)
+        if not image.isNull():
+            self._canvas.set_images(image, image)
 
     def _on_photo_loaded(self, generation: int, payload: object) -> None:
         """A background photo decode finished — wire it in if it is still wanted."""
@@ -359,6 +389,31 @@ class DevelopModule(ModuleView):
     def current_photo(self) -> Photo | None:
         """The photo currently open for editing, if any."""
         return self._photo if self._renderer is not None else None
+
+    def prefetch_photo(self, photo: Photo) -> None:
+        """Warm the smart-preview cache for ``photo`` (a filmstrip neighbour).
+
+        Decodes on the prefetch thread so the *next* arrow press opens from cache
+        (~100 ms) instead of a full RAW decode. No-op for rendered files (they
+        decode fast and are not cached) and for photos already cached/in flight.
+        """
+        key = photo.content_hash
+        if not photo.is_raw or not key or key in self._prefetching:
+            return
+        if self._previews.contains(key):
+            return
+        path = self._catalog.resolve_path(photo)
+        if path is None or not path.exists():
+            return
+        self._prefetching.add(key)
+        task = _PrefetchTask(
+            self._engine, self._raw_service, self._previews, path, photo, key,
+            self._render_signals,
+        )
+        self._prefetch_pool.start(task)
+
+    def _on_prefetched(self, key: str) -> None:
+        self._prefetching.discard(key)
 
     @property
     def requested_photo(self) -> Photo | None:
@@ -924,6 +979,7 @@ class _RenderSignals(QObject):
     done = Signal(int, object, object)  # (generation, QImage, uint8 pixels)
     loaded = Signal(int, object)  # (load generation, _LoadedPhoto | None)
     before_ready = Signal(int, object, object)  # (before generation, ImageBuffer, QImage)
+    prefetched = Signal(str)  # cache key of a finished neighbour prefetch
 
 
 class _FullRenderTask(QRunnable):
@@ -1016,20 +1072,49 @@ class _LoadedPhoto:
         self.as_shot_kelvin = as_shot_kelvin
 
 
+def _decode_base(
+    engine: DevelopEngine,
+    raw_service: RawService,
+    previews: PreviewCache,
+    path: Path,
+    photo: Photo,
+) -> tuple[ImageBuffer, float | None] | None:
+    """The photo's preview-sized base + as-shot Kelvin, via the smart-preview cache.
+
+    A cache hit skips the multi-second LibRaw decode (and the second RAW open for
+    the as-shot temperature). RAW misses are decoded and written back; rendered
+    files (JPEG/PNG/TIFF) decode fast enough that caching them isn't worth the disk.
+    """
+    key = photo.content_hash if photo.is_raw else None
+    if key:
+        cached = previews.load(key)
+        if cached is not None:
+            return cached
+    renderer = engine.open_layered(path, is_raw=photo.is_raw)
+    if renderer is None:
+        return None
+    as_shot = raw_service.as_shot_temperature(path) if photo.is_raw else None
+    if key:
+        previews.save(key, renderer.base, as_shot)
+    return (renderer.base, as_shot)
+
+
 class _LoadTask(QRunnable):
     """Decodes a photo and prepares its renderers/reference images off-thread.
 
     RAW decode takes seconds; doing it here (plus the identity "Before" render and
-    the proxy/preview downscales) keeps photo switching stutter-free. Emits
-    ``loaded`` with a :class:`_LoadedPhoto`, or ``None`` when the decode failed.
+    the proxy/preview downscales) keeps photo switching stutter-free. The
+    smart-preview cache turns repeat opens into ~100 ms loads. Emits ``loaded``
+    with a :class:`_LoadedPhoto`, or ``None`` when the decode failed.
     """
 
     def __init__(
         self,
         engine: DevelopEngine,
         raw_service: RawService,
+        previews: PreviewCache,
         path: Path,
-        is_raw: bool,
+        photo: Photo,
         geometry: Geometry,
         generation: int,
         signals: _RenderSignals,
@@ -1037,8 +1122,9 @@ class _LoadTask(QRunnable):
         super().__init__()
         self._engine = engine
         self._raw_service = raw_service
+        self._previews = previews
         self._path = path
-        self._is_raw = is_raw
+        self._photo = photo
         self._geometry = geometry
         self._generation = generation
         self._signals = signals
@@ -1046,27 +1132,66 @@ class _LoadTask(QRunnable):
 
     def run(self) -> None:
         try:
-            renderer = self._engine.open_layered(self._path, is_raw=self._is_raw)
-            if renderer is None:
+            decoded = _decode_base(
+                self._engine, self._raw_service, self._previews, self._path, self._photo
+            )
+            if decoded is None:
                 self._signals.loaded.emit(self._generation, None)
                 return
-            proxy = _make_proxy(renderer.base, _PROXY_EDGE)
-            geo_base = apply_geometry(renderer.base, self._geometry)
+            base, as_shot = decoded
+            renderer = LayerRenderer(base)
+            proxy = _make_proxy(base, _PROXY_EDGE)
+            geo_base = apply_geometry(base, self._geometry)
             before = PipelineRenderer(geo_base).render(EditState())
             payload = _LoadedPhoto(
                 renderer=renderer,
                 proxy_renderer=proxy,
                 before_buffer=before,
                 before_qimage=ndarray_to_qimage(before.to_uint8()),
-                preview_base=downscale_buffer(renderer.base, _PREVIEW_EDGE),
-                as_shot_kelvin=(
-                    self._raw_service.as_shot_temperature(self._path) if self._is_raw else None
-                ),
+                preview_base=downscale_buffer(base, _PREVIEW_EDGE),
+                as_shot_kelvin=as_shot,
             )
             self._signals.loaded.emit(self._generation, payload)
         except Exception:
             logger.exception("Background photo load failed")
             self._signals.loaded.emit(self._generation, None)
+
+
+class _PrefetchTask(QRunnable):
+    """Warms the smart-preview cache for a filmstrip neighbour, off-thread.
+
+    Runs on its own single-thread pool so it never delays the photo the user
+    actually opened; emits ``prefetched`` (with the cache key) when done so the
+    module can clear its in-flight marker.
+    """
+
+    def __init__(
+        self,
+        engine: DevelopEngine,
+        raw_service: RawService,
+        previews: PreviewCache,
+        path: Path,
+        photo: Photo,
+        key: str,
+        signals: _RenderSignals,
+    ) -> None:
+        super().__init__()
+        self._engine = engine
+        self._raw_service = raw_service
+        self._previews = previews
+        self._path = path
+        self._photo = photo
+        self._key = key
+        self._signals = signals
+        self.setAutoDelete(True)
+
+    def run(self) -> None:
+        try:
+            _decode_base(self._engine, self._raw_service, self._previews, self._path, self._photo)
+        except Exception:
+            logger.exception("Preview prefetch failed for %s", self._path)
+        finally:
+            self._signals.prefetched.emit(self._key)
 
 
 class _PanelResizer(QWidget):
