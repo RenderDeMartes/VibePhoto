@@ -69,6 +69,9 @@ class LibraryModule(ModuleView):
     #: Emitted to auto-process a batch of photos off-thread: (photos, kind) where
     #: kind is "edit" (auto-tone) or "hdr" (single-image HDR look).
     auto_requested = Signal(object, str)
+    #: Emitted when the minimum-rating filter changes (so mirrors, e.g. the
+    #: filmstrip's filter bar, can stay in sync).
+    min_rating_changed = Signal(int)
 
     def __init__(self, app: Application, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -137,7 +140,11 @@ class LibraryModule(ModuleView):
     def set_min_rating(self, minimum: int) -> None:
         """Show only photos rated at least ``minimum`` stars (0 = all)."""
         self._min_rating = minimum
+        button = self._rating_filter.button(minimum)
+        if button is not None and not button.isChecked():
+            button.setChecked(True)  # keep the Library bar in sync with mirrors
         self.reload()
+        self.min_rating_changed.emit(minimum)
 
     def current_photos(self) -> list[Photo]:
         """The photos currently visible in the grid (after folder + rating filters)."""

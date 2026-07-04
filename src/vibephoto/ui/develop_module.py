@@ -83,6 +83,8 @@ class DevelopModule(ModuleView):
     #: Left/Right arrow pressed: navigate to the previous (-1) / next (+1) photo.
     #: The shell resolves the target from the filmstrip's current photo set.
     photo_nav_requested = Signal(int)
+    #: The open photo's star rating changed (so the filmstrip badge can repaint).
+    photo_rated = Signal()
 
     def __init__(self, app: Application, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -560,6 +562,7 @@ class DevelopModule(ModuleView):
         if self._photo is not None and self._photo.id is not None:
             self._catalog.photos.set_rating(self._photo.id, rating)
             self._photo.rating = rating
+            self.photo_rated.emit()
 
     def _rate_by_key(self, rating: int) -> None:
         """Keyboard rating (0-5): update the footer stars and persist."""

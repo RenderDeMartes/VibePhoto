@@ -271,6 +271,21 @@ def test_library_reset_edits_restores_original(qapp: QApplication, app_with_phot
     assert pasted  # Develop is told to refresh
 
 
+def test_min_rating_filter_emits_and_syncs_buttons(qapp: QApplication, app_with_photo) -> None:
+    # The filmstrip's mini filter mirrors the Library's; the signal + button sync
+    # is what keeps the two bars consistent.
+    library = LibraryModule(app_with_photo)
+    library.reload()
+    seen: list[int] = []
+    library.min_rating_changed.connect(seen.append)
+    library.set_min_rating(3)
+    assert seen == [3]
+    assert library._rating_filter.checkedId() == 3
+    library.set_min_rating(0)
+    assert seen == [3, 0]
+    assert library._rating_filter.checkedId() == 0
+
+
 def test_library_double_click_emits_and_selects(qapp: QApplication, app_with_photo) -> None:
     library = LibraryModule(app_with_photo)
     library.reload()

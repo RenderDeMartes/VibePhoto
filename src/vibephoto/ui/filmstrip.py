@@ -12,7 +12,7 @@ from PySide6.QtCore import QModelIndex, QPersistentModelIndex, QSize, Qt, Signal
 from PySide6.QtWidgets import QListView, QWidget
 
 from vibephoto.catalog.models import Photo
-from vibephoto.ui.photo_grid import PhotoGridModel
+from vibephoto.ui.photo_grid import GridDelegate, PhotoGridModel
 
 _THUMB = 84
 
@@ -26,6 +26,7 @@ class Filmstrip(QListView):
         super().__init__(parent)
         self._model = model
         self.setModel(model)
+        self.setItemDelegate(GridDelegate(self))  # star-rating badge, like the grid
         self.setViewMode(QListView.ViewMode.IconMode)
         self.setFlow(QListView.Flow.LeftToRight)
         self.setWrapping(False)

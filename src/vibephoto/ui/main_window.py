@@ -20,17 +20,21 @@ from pathlib import Path
 from PySide6.QtCore import QPoint, QSettings, Qt, QThreadPool
 from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QDockWidget,
     QFileDialog,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMenu,
     QMessageBox,
     QProgressBar,
+    QPushButton,
     QStackedWidget,
     QToolBar,
     QTreeWidget,
     QTreeWidgetItem,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -106,6 +110,8 @@ class MainWindow(QMainWindow):
         self._develop.paste_to_selected_requested.connect(self._paste_to_selected)
         self._develop.render_busy_changed.connect(self._set_busy)
         self._develop.photo_nav_requested.connect(self._on_develop_nav)
+        # Ratings set in Develop repaint the filmstrip's star badges immediately.
+        self._develop.photo_rated.connect(lambda: self._filmstrip.viewport().update())
         for module in (self._library, self._develop):
             self._modules[module.module_id] = module
             self._stack.addWidget(module)
@@ -135,13 +141,56 @@ class MainWindow(QMainWindow):
         # The Develop adjustments live in the Develop module's own right-hand panel
         # (canvas + panel), so no separate Adjustments dock is needed here.
 
-        # Bottom: a live filmstrip bound to the catalog.
+        # Bottom: a live filmstrip bound to the catalog, with a compact
+        # rating-filter bar so the star filters are reachable from Develop too.
         self._filmstrip_model = PhotoGridModel(self._app.resolve(ThumbnailCache))
         self._filmstrip = Filmstrip(self._filmstrip_model)
         self._filmstrip.photo_clicked.connect(self._on_filmstrip_clicked)
+        strip_body = QWidget()
+        strip_layout = QVBoxLayout(strip_body)
+        strip_layout.setContentsMargins(0, 0, 0, 0)
+        strip_layout.setSpacing(0)
+        strip_layout.addWidget(self._build_strip_rating_bar())
+        strip_layout.addWidget(self._filmstrip)
+        self._library.min_rating_changed.connect(self._sync_strip_rating)
         self._dock_filmstrip = self._make_dock(
-            "Filmstrip", "dock.filmstrip", self._filmstrip, Qt.DockWidgetArea.BottomDockWidgetArea
+            "Filmstrip", "dock.filmstrip", strip_body, Qt.DockWidgetArea.BottomDockWidgetArea
         )
+
+    def _build_strip_rating_bar(self) -> QWidget:
+        """The filmstrip's mini rating filter — mirrors the Library's filter."""
+        bar = QHBoxLayout()
+        bar.setContentsMargins(6, 2, 6, 2)
+        bar.setSpacing(4)
+        hint = QLabel("Rating ≥")
+        hint.setStyleSheet("color:#9a9da3; font-size:11px;")
+        bar.addWidget(hint)
+        self._strip_rating = QButtonGroup(self)
+        self._strip_rating.setExclusive(True)
+        for label, value in (("All", 0), ("1★", 1), ("2★", 2), ("3★", 3), ("4★", 4), ("5★", 5)):
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.setChecked(value == 0)
+            button.setFixedHeight(20)
+            button.setStyleSheet(
+                "QPushButton{font-size:11px; padding:0 8px;}"
+                "QPushButton:checked{background:#3d8bfd; color:#fff; border-color:#3d8bfd;}"
+            )
+            button.clicked.connect(
+                lambda _checked=False, v=value: self._library.set_min_rating(v)
+            )
+            self._strip_rating.addButton(button, value)
+            bar.addWidget(button)
+        bar.addStretch(1)
+        widget = QWidget()
+        widget.setLayout(bar)
+        return widget
+
+    def _sync_strip_rating(self, minimum: int) -> None:
+        """Reflect the Library's rating filter in the filmstrip bar (no re-trigger)."""
+        button = self._strip_rating.button(minimum)
+        if button is not None and not button.isChecked():
+            button.setChecked(True)
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("Modules", self)
