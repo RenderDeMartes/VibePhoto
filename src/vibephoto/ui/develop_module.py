@@ -425,6 +425,14 @@ class DevelopModule(ModuleView):
         return self._photo
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
+        # Enter/Return in the crop tool applies the crop (non-destructive — the
+        # geometry is saved with the edit and export renders through it).
+        if (
+            event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+            and self._footer.crop_active
+        ):
+            self._set_crop(False)
+            return
         # Left/Right navigate the filmstrip — but only when they reach the module
         # (a focused slider consumes arrows first, keeping keyboard nudge intact).
         if event.key() == Qt.Key.Key_Right:

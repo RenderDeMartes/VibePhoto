@@ -82,6 +82,24 @@ class FolderRepository:
     def list_all(self) -> list[Folder]:
         return [self._row(r) for r in self._db.query("SELECT * FROM folders ORDER BY path")]
 
+    def remove(self, folder_id: int) -> int:
+        """Remove a folder and its photos from the catalog; files on disk stay.
+
+        Returns the number of photos removed. Photo rows (and their metadata,
+        develop versions, keywords, …) cascade via foreign keys; the FTS index
+        has no foreign key, so its rows are cleared explicitly first.
+        """
+        row = self._db.query_one(
+            "SELECT COUNT(*) AS n FROM photos WHERE folder_id = ?", (folder_id,)
+        )
+        count = int(row["n"]) if row is not None else 0
+        self._db.execute(
+            "DELETE FROM photo_fts WHERE rowid IN (SELECT id FROM photos WHERE folder_id = ?)",
+            (folder_id,),
+        )
+        self._db.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
+        return count
+
     @staticmethod
     def _row(row: sqlite3.Row) -> Folder:
         return Folder(

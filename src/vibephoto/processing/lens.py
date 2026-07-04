@@ -19,6 +19,11 @@ import numpy as np
 
 from vibephoto.processing.color import Array, clip01
 
+try:  # OpenCV remap resamples all channels in one SIMD multithreaded pass.
+    import cv2
+except ImportError:  # pragma: no cover - exercised on installs without the cv extra
+    cv2 = None  # type: ignore[assignment]
+
 
 def _radial_grid(height: int, width: int) -> tuple[Array, Array, Array]:
     """Centre-origin coordinate grids ``(gx, gy)`` and radius ``r`` (1.0 at the
@@ -48,6 +53,23 @@ def _sample(channel: Array, xs: Array, ys: Array) -> Array:
     return out
 
 
+def _sample_rgb(rgb: Array, map_x: Array, map_y: Array) -> Array:
+    """Bilinear-resample all three channels at the given source coordinates."""
+    if cv2 is not None:
+        remapped = cv2.remap(
+            np.ascontiguousarray(rgb, dtype=np.float32),
+            np.ascontiguousarray(map_x, dtype=np.float32),
+            np.ascontiguousarray(map_y, dtype=np.float32),
+            interpolation=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REPLICATE,
+        )
+        return np.asarray(remapped, dtype=np.float32)
+    out = np.empty_like(rgb)
+    for c in range(rgb.shape[2]):
+        out[..., c] = _sample(rgb[..., c], map_x, map_y)
+    return out.astype(np.float32)
+
+
 def _remap_radial(rgb: Array, scale_per_channel: tuple[float, float, float]) -> Array:
     """Resample each channel after scaling source radius by ``1 + s*r²`` per channel."""
     height, width = rgb.shape[0], rgb.shape[1]
@@ -57,32 +79,64 @@ def _remap_radial(rgb: Array, scale_per_channel: tuple[float, float, float]) -> 
     out = np.empty_like(rgb)
     for c, s in enumerate(scale_per_channel):
         factor = 1.0 + s * r2
-        out[..., c] = _sample(rgb[..., c], cx + gx * factor, cy + gy * factor)
+        channel = rgb[..., c]
+        if cv2 is not None:
+            remapped = cv2.remap(
+                np.ascontiguousarray(channel, dtype=np.float32),
+                np.ascontiguousarray(cx + gx * factor, dtype=np.float32),
+                np.ascontiguousarray(cy + gy * factor, dtype=np.float32),
+                interpolation=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_REPLICATE,
+            )
+            out[..., c] = remapped
+        else:
+            out[..., c] = _sample(channel, cx + gx * factor, cy + gy * factor)
     return out.astype(np.float32)
+
+
+def _distortion_zoom(s2: float, s4: float, corner_r: float) -> float:
+    """Destination pre-scale that keeps every distortion sample inside the frame.
+
+    Correcting barrel distortion samples the source *outside* the frame at the
+    edges, which smears the border pixels into streaks. Scaling the destination
+    grid by ``z < 1`` (i.e. zooming in — cropping closer) keeps the far corner's
+    sample exactly on the original corner: solve ``z·f(corner_r·z) = 1`` by fixed-
+    point iteration (``f`` is the radial factor; converges fast for ``s ≥ 0``).
+    """
+    if s2 <= 0.0 and s4 <= 0.0:
+        return 1.0
+    z = 1.0
+    for _ in range(40):
+        rz2 = (corner_r * z) ** 2
+        z = 1.0 / (1.0 + s2 * rz2 + s4 * rz2 * rz2)
+    return z
 
 
 def _remap_distort(rgb: Array, s2: float, s4: float) -> Array:
     """Resample with a 2nd + 4th order radial factor (``1 + s2·r² + s4·r⁴``).
 
     The 4th-order term lets a strong setting pull a fisheye's hard-bent edges back
-    to straight, which a pure quadratic cannot.
+    to straight, which a pure quadratic cannot. For positive (barrel) correction
+    the frame is automatically zoomed in just enough that no sample falls outside
+    the source, so the result has clean edges instead of smeared borders.
     """
     height, width = rgb.shape[0], rgb.shape[1]
     gx, gy, r = _radial_grid(height, width)
-    r2 = r * r
-    factor = 1.0 + s2 * r2 + s4 * r2 * r2
+    norm = max(1.0, min(height, width) / 2.0)
+    corner_r = float(np.hypot((width - 1) / 2.0, (height - 1) / 2.0) / norm)
+    zoom = _distortion_zoom(s2, s4, corner_r)
+    r2 = (r * zoom) ** 2
+    factor = zoom * (1.0 + s2 * r2 + s4 * r2 * r2)
     cx, cy = (width - 1) / 2.0, (height - 1) / 2.0
-    out = np.empty_like(rgb)
-    for c in range(rgb.shape[2]):
-        out[..., c] = _sample(rgb[..., c], cx + gx * factor, cy + gy * factor)
-    return out.astype(np.float32)
+    return _sample_rgb(rgb, cx + gx * factor, cy + gy * factor)
 
 
 def correct_distortion(rgb: Array, amount: float) -> Array:
     """Correct barrel (``amount`` > 0) / pincushion (< 0) distortion (-100..100).
 
     Strong positive values defish: the 4th-order term straightens the extreme
-    edge curvature of a fisheye / action-cam lens.
+    edge curvature of a fisheye / action-cam lens. The corrected frame is scaled
+    to fill (cropping in slightly), so no stretched border pixels remain.
     """
     if amount == 0.0:
         return rgb

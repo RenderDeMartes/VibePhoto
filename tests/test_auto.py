@@ -25,6 +25,14 @@ def test_auto_tone_actually_improves_brightness() -> None:
     assert float(out.data.mean()) > float(base.data.mean())
 
 
+def test_auto_tone_lifts_very_dark_images_strongly() -> None:
+    # A dusk/night shot needs a real lift: linear-space exposure math gives the
+    # full clamp, not the timid gamma-space value that left dark photos dark.
+    state = auto_tone(_flat(0.08))
+    assert state.exposure >= 2.0
+    assert state.shadows > 0
+
+
 def test_auto_hdr_has_strong_shadow_highlight_and_clarity() -> None:
     state = auto_hdr(_flat(0.3))
     assert state.highlights <= -70 and state.shadows >= 60 and state.clarity > 0

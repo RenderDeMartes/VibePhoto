@@ -57,6 +57,24 @@ def test_folder_get_or_create(db: Database) -> None:
     assert len(repo.list_all()) == 1
 
 
+def test_folder_remove_deletes_folder_and_photos(db: Database) -> None:
+    vol = VolumeRepository(db).get_or_create("uuid-1")
+    folders = FolderRepository(db)
+    keep = folders.get_or_create(vol.id, "keep", "keep")
+    doomed = folders.get_or_create(vol.id, "doomed", "doomed")
+    photos = PhotoRepository(db)
+    kept_id = photos.insert(_make_photo(keep.id, "keep.jpg"))
+    photos.insert(_make_photo(doomed.id, "gone1.jpg"))
+    photos.insert(_make_photo(doomed.id, "gone2.jpg"))
+
+    removed = folders.remove(doomed.id)
+    assert removed == 2
+    assert folders.get_by_id(doomed.id) is None
+    assert [f.id for f in folders.list_all()] == [keep.id]
+    assert photos.list_by_folder(doomed.id) == []
+    assert photos.get_by_id(kept_id) is not None  # other folders untouched
+
+
 def test_insert_and_get_photo(db: Database) -> None:
     vol = VolumeRepository(db).get_or_create("uuid-1")
     folder = FolderRepository(db).get_or_create(vol.id, "p", "p")

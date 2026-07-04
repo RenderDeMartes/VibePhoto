@@ -18,6 +18,13 @@ from vibephoto.processing.edit_state import EditState
 from vibephoto.processing.image_buffer import ImageBuffer
 
 
+def _srgb_value_to_linear(value: float) -> float:
+    """Scalar inverse sRGB transfer (the analysed buffer is display-referred)."""
+    if value <= 0.04045:
+        return value / 12.92
+    return float(((value + 0.055) / 1.055) ** 2.4)
+
+
 def auto_tone(buffer: ImageBuffer) -> EditState:
     """Compute an auto-tone :class:`EditState` from an image's luminance stats."""
     lum = luminance(buffer.data)
@@ -26,15 +33,22 @@ def auto_tone(buffer: ImageBuffer) -> EditState:
     )
     state = EditState()
 
-    # Exposure: bring the median brightness toward a pleasant midtone.
-    if mid > 0.02:
-        state.exposure = float(np.clip(np.log2(0.46 / mid), -1.5, 1.5))
+    # Exposure: bring the median toward middle grey. The Exposure control is a
+    # *linear-light* multiply (2**ev), so the stops must be computed from linear
+    # luminance — a gamma-space ratio badly underestimates the lift a dark photo
+    # needs (the old ±1.5 EV gamma version left night/dusk shots dark).
+    linear_mid = _srgb_value_to_linear(mid)
+    if linear_mid > 1e-5:
+        state.exposure = float(np.clip(np.log2(0.18 / linear_mid), -2.5, 2.5))
 
-    # Recover blown highlights / lift crushed shadows.
+    # Recover blown highlights / lift crushed shadows. The shadow lift also keys
+    # off the lower quartile, so a broadly dark image gets help, not just one
+    # with a crushed black point.
     if hi > 0.95:
         state.highlights = -float(np.clip((hi - 0.95) / 0.05 * 60.0, 0.0, 60.0))
-    if lo < 0.06:
-        state.shadows = float(np.clip((0.06 - lo) / 0.06 * 50.0, 0.0, 50.0))
+    shadow_need = max((0.06 - lo) / 0.06, (0.20 - q25) / 0.20, 0.0)
+    if shadow_need > 0.0:
+        state.shadows = float(np.clip(shadow_need * 50.0, 0.0, 50.0))
 
     # White/black points: nudge toward gentle clipping for a fuller histogram.
     state.whites = float(np.clip((0.95 - hi) * 300.0, -20.0, 40.0))

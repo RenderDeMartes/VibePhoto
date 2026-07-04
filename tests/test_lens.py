@@ -129,11 +129,16 @@ def test_detect_lens_profile_from_metadata() -> None:
     assert detect_lens_profile(None, 0) is None  # zero/invalid focal, no lens name
 
 
-def test_strong_distortion_defishes_more_at_edges() -> None:
-    # A bright ring near the edge moves inward under a strong defish.
+def test_strong_distortion_fills_frame_without_edge_smear() -> None:
+    # Defish zooms to fill: the frame corner samples exactly the source corner
+    # (no out-of-frame sampling = no smeared border streaks), and content near
+    # the centre is magnified outward by the compensating zoom.
     img = np.zeros((81, 81, 3), dtype=np.float32)
-    img[40, 70:78, :] = 1.0  # a mark out toward the right edge
+    img[0, 0, :] = 0.7  # distinctive corner pixel
+    img[40, 50:54, :] = 1.0  # a mark at mid radius
     out = correct_distortion(img, 100.0)
-    # Brightness that was at the far edge is pulled in toward centre.
-    assert float(out[40, 70:78].sum()) < float(img[40, 70:78].sum())
-    assert float(out[40, 55:70].sum()) > 0.0  # appears further in
+    assert out.shape == img.shape
+    assert np.allclose(out[0, 0], img[0, 0], atol=1e-3)  # corner maps to corner
+    # The mid-radius mark moves outward (zoom-to-fill magnification).
+    assert float(out[40, 54:70].sum()) > 0.0
+    assert float(out[40, 50:54].sum()) < float(img[40, 50:54].sum())

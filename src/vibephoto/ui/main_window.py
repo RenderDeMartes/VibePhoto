@@ -17,7 +17,7 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt, QThreadPool
+from PySide6.QtCore import QPoint, QSettings, Qt, QThreadPool
 from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QDockWidget,
@@ -126,6 +126,8 @@ class MainWindow(QMainWindow):
         self._nav = QTreeWidget()
         self._nav.setHeaderHidden(True)
         self._nav.itemClicked.connect(self._on_nav_clicked)
+        self._nav.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._nav.customContextMenuRequested.connect(self._on_nav_context_menu)
         self._dock_catalog = self._make_dock(
             "Catalog", "dock.catalog", self._nav, Qt.DockWidgetArea.LeftDockWidgetArea
         )
@@ -315,6 +317,38 @@ class MainWindow(QMainWindow):
         folder_id = data if isinstance(data, int) else None
         self._library.show_folder(folder_id)
         self._switch_module(ModuleId.LIBRARY)
+
+    def _on_nav_context_menu(self, pos: QPoint) -> None:
+        """Right-click on a folder in the navigator: remove it from the catalog."""
+        item = self._nav.itemAt(pos)
+        if item is None:
+            return
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if not isinstance(data, int):
+            return  # "All Photographs" / group headers have no folder id
+        menu = QMenu(self)
+        remove_action = menu.addAction("Remove Folder from Catalog…")
+        chosen = menu.exec(self._nav.viewport().mapToGlobal(pos))
+        if chosen is not remove_action:
+            return
+        confirmed = QMessageBox.question(
+            self,
+            "Remove Folder",
+            f"Remove '{item.text(0)}' and its photos from the catalog?\n\n"
+            "The image files on disk are NOT deleted — only the catalog entries "
+            "(and their edits) are removed.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirmed != QMessageBox.StandardButton.Yes:
+            return
+        removed = self._app.resolve(CatalogService).folders.remove(data)
+        self.statusBar().showMessage(
+            f"Removed '{item.text(0)}' ({removed} photo(s)) from the catalog", 6000
+        )
+        self._reload_navigator()
+        self._library.show_folder(None)  # the removed folder can't stay filtered
+        self._reload_filmstrip()
 
     # -- Import ------------------------------------------------------------- #
 
