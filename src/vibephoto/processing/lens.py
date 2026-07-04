@@ -144,6 +144,22 @@ def correct_distortion(rgb: Array, amount: float) -> Array:
     return _remap_distort(rgb, k * 0.30, k * 0.25)
 
 
+def scale_image(rgb: Array, percent: float) -> Array:
+    """Zoom about the centre: ``percent`` > 100 crops closer (100 = no change).
+
+    The manual companion to the automatic distortion zoom — scale in a little
+    further to hide any remaining corner artefacts. Values below 100 are clamped
+    (zooming out would invent border pixels).
+    """
+    if percent <= 100.0:
+        return rgb
+    height, width = rgb.shape[0], rgb.shape[1]
+    gx, gy, _r = _radial_grid(height, width)
+    inv = 100.0 / percent
+    cx, cy = (width - 1) / 2.0, (height - 1) / 2.0
+    return _sample_rgb(rgb, cx + gx * inv, cy + gy * inv)
+
+
 def correct_chromatic_aberration(rgb: Array, amount: float) -> Array:
     """Re-converge lateral CA: scale red out and blue in (or vice versa), -100..100."""
     if amount == 0.0:

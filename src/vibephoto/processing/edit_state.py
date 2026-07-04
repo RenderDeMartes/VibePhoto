@@ -114,6 +114,7 @@ class EditState:
     lens_distortion: float = 0.0  # -100..100 (barrel/pincushion)
     lens_ca: float = 0.0  # -100..100 (chromatic aberration / defringe)
     lens_vignetting: float = 0.0  # -100..100 (corner brighten/darken)
+    lens_scale: float = 100.0  # 100..150 (% centre zoom — crop away corner artefacts)
 
     # Effects
     vignette_amount: float = 0.0  # -100..100

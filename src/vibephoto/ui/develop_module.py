@@ -671,10 +671,10 @@ class DevelopModule(ModuleView):
         if active:
             g = self._stack.geometry
             self._canvas.set_mask_edit(None)  # crop and mask editing are exclusive
-            # Cache the *unedited* developed image (small) once: straighten/rotate is
-            # then just a fast image rotate, and the crop is shown over the original.
-            if self._before_buffer is not None:
-                self._crop_base = downscale_buffer(self._before_buffer, _PROXY_EDGE)
+            # Cache the *edited* image (small, full frame, no geometry) once: the
+            # crop is placed over what the photo actually looks like, and
+            # straighten/rotate is then just a fast image rotate.
+            self._crop_base = self._render_uncropped_proxy()
             self._footer.set_straighten(g.angle)
             self._canvas.set_crop_mode(True, (g.left, g.top, g.right, g.bottom), g.angle)
             self._render_crop_view()
@@ -685,6 +685,20 @@ class DevelopModule(ModuleView):
             self._sync_panel()
             self._render_full()
             self._persist()
+
+    def _render_uncropped_proxy(self) -> ImageBuffer | None:
+        """A proxy-sized *edited* render of the full (un-cropped, un-rotated) frame.
+
+        A throwaway draft renderer over an identity-geometry copy of the stack, so
+        the crop tool shows the photo with its adjustments applied — not the
+        unedited original — without disturbing the live renderers' caches.
+        """
+        if self._renderer is None:
+            return None
+        base = downscale_buffer(self._renderer.base, _PROXY_EDGE)
+        stack = self._stack.copy()
+        stack.geometry = Geometry()  # full frame — the overlay draws the crop rect
+        return LayerRenderer(base, draft=True).render(stack)
 
     def _render_crop_view(self) -> None:
         """Show the *uncropped* but rotated/straightened original (fast: just geometry)."""

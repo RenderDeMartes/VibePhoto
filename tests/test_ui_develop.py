@@ -238,6 +238,21 @@ def test_apply_imported_preset_renders(qapp: QApplication, app_with_photo) -> No
     assert not module._canvas._after.isNull()
 
 
+def test_crop_view_shows_edited_photo(qapp: QApplication, app_with_photo) -> None:
+    # Entering the crop tool must show the photo WITH its adjustments, not the
+    # unedited original.
+    module = DevelopModule(app_with_photo)
+    _load(qapp, module, _first_photo(app_with_photo))
+    module._on_param_changed("exposure", None, 2.0)
+    module._footer.set_crop_active(True)  # -> _on_crop_toggled(True)
+    assert module._crop_base is not None
+    assert module._before_buffer is not None
+    edited_mean = float(module._crop_base.data.mean())
+    original_mean = float(module._before_buffer.data.mean())
+    assert edited_mean > original_mean + 0.05  # +2 EV clearly visible
+    module._footer.set_crop_active(False)
+
+
 def test_library_reset_edits_restores_original(qapp: QApplication, app_with_photo) -> None:
     from vibephoto.processing.layers import LayerStack
     from vibephoto.processing.store import DevelopStore

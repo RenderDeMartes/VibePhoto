@@ -10,6 +10,7 @@ from vibephoto.processing.lens import (
     correct_chromatic_aberration,
     correct_distortion,
     correct_vignetting,
+    scale_image,
 )
 from vibephoto.processing.pipeline import PipelineRenderer, build_stages
 
@@ -127,6 +128,25 @@ def test_detect_lens_profile_from_metadata() -> None:
     assert detect_lens_profile(None, "8 mm") == "Ultra-wide"
     assert detect_lens_profile(None, "not-a-number") is None  # unparseable + no name
     assert detect_lens_profile(None, 0) is None  # zero/invalid focal, no lens name
+
+
+def test_scale_image_zooms_centre_and_is_identity_at_100() -> None:
+    img = np.zeros((81, 81, 3), dtype=np.float32)
+    img[40, 50:54, :] = 1.0  # a mark at mid radius
+    assert scale_image(img, 100.0) is img
+    assert scale_image(img, 90.0) is img  # zoom-out is clamped (would invent pixels)
+    out = scale_image(img, 140.0)
+    assert out.shape == img.shape
+    assert float(out[40, 54:62].sum()) > 0.0  # mark moved outward (zoomed in)
+    assert float(out[40, 50:54].sum()) < float(img[40, 50:54].sum())
+
+
+def test_lens_scale_wired_into_pipeline() -> None:
+    stages = {stage.name: stage for stage in build_stages()}
+    assert "lens_scale" in stages["lens_geometry"].keys
+    img = ImageBuffer(np.random.default_rng(1).random((40, 60, 3)).astype(np.float32))
+    out = PipelineRenderer(img).render(EditState(lens_scale=130.0))
+    assert not np.allclose(out.data, img.data)  # the scale actually renders
 
 
 def test_strong_distortion_fills_frame_without_edge_smear() -> None:

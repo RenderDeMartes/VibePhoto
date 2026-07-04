@@ -112,9 +112,11 @@ def _display_tail() -> tuple[Stage, ...]:
     """Profile → presence → curves → HSL → grade → detail → effects (display space)."""
     return (
         Stage("profile", ("profile",), lambda d, s: profiles.apply_profile(d, s.profile)),
-        Stage("lens_geometry", ("lens_distortion", "lens_ca"),
-              lambda d, s: lens.correct_chromatic_aberration(
-                  lens.correct_distortion(d, s.lens_distortion), s.lens_ca)),
+        Stage("lens_geometry", ("lens_distortion", "lens_ca", "lens_scale"),
+              lambda d, s: lens.scale_image(
+                  lens.correct_chromatic_aberration(
+                      lens.correct_distortion(d, s.lens_distortion), s.lens_ca),
+                  s.lens_scale)),
         Stage("lens_vignetting", ("lens_vignetting",),
               lambda d, s: lens.correct_vignetting(d, s.lens_vignetting)),
         Stage("texture", ("texture",),

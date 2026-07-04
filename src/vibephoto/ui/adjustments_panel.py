@@ -143,6 +143,7 @@ PARAM_GROUPS: tuple[tuple[str, list[SliderSpec], bool, int], ...] = (
             SliderSpec("lens_distortion", "Distortion", -100, 100, 0, level=INTERMEDIATE),
             SliderSpec("lens_ca", "Defringe (CA)", -100, 100, 0, level=INTERMEDIATE),
             SliderSpec("lens_vignetting", "Vignetting", -100, 100, 0, level=INTERMEDIATE),
+            SliderSpec("lens_scale", "Scale (%)", 100, 150, 100, level=INTERMEDIATE),
         ],
         False,
         INTERMEDIATE,
