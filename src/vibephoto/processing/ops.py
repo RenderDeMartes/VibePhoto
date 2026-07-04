@@ -110,7 +110,9 @@ def dehaze(rgb: Array, amount: float) -> Array:
         return rgb
     a = amount / 100.0
     if a > 0.0:
-        veil = float(np.quantile(np.min(rgb, axis=-1), 0.85))
+        # Estimate the veil on a subsampled grid — the 85th percentile of the
+        # dark channel is statistically identical at 1/16 the pixels.
+        veil = float(np.quantile(np.min(rgb[::4, ::4], axis=-1), 0.85))
         out = clip01((rgb - a * veil * 0.5) / max(1e-3, 1.0 - a * veil * 0.5))
         out = contrast(out, a * 30.0)
         return vibrance_saturation(out, 0.0, a * 25.0)
@@ -147,7 +149,7 @@ def parametric_curve(
             y = y + (amount / 100.0) * 0.22 * np.exp(-((x - center) ** 2) / (2 * width * width))
     y = np.maximum.accumulate(np.clip(y, 0.0, 1.0)).astype(np.float32)
     lut = np.clip(y, 0.0, 1.0).astype(np.float32)
-    return np.stack([apply_lut(rgb[..., c], lut) for c in range(3)], axis=-1)
+    return apply_lut(rgb, lut)  # one gather over all three channels
 
 
 def point_curves(
@@ -157,27 +159,42 @@ def point_curves(
     green_pts: list[tuple[int, int]],
     blue_pts: list[tuple[int, int]],
 ) -> Array:
-    """Apply point tone curves: a master (all channels) then per-channel curves."""
-    out = rgb
-    if rgb_pts:
-        master = lut_from_points([(float(x), float(y)) for x, y in rgb_pts])
-        out = np.stack([apply_lut(out[..., c], master) for c in range(3)], axis=-1)
-    for channel, pts in enumerate((red_pts, green_pts, blue_pts)):
-        if pts:
-            lut = lut_from_points([(float(x), float(y)) for x, y in pts])
-            out = out.copy()
-            out[..., channel] = apply_lut(out[..., channel], lut)
+    """Apply point tone curves: a master (all channels) then per-channel curves.
+
+    The master and per-channel curves are *composed into one LUT per channel*, so
+    the image is touched exactly once regardless of how many curves are active.
+    """
+    master = lut_from_points([(float(x), float(y)) for x, y in rgb_pts]) if rgb_pts else None
+    luts: list[Array | None] = []
+    for pts in (red_pts, green_pts, blue_pts):
+        lut = lut_from_points([(float(x), float(y)) for x, y in pts]) if pts else None
+        if lut is not None and master is not None:
+            # compose: channel curve applied to the master's output
+            lut = lut[np.clip(master * 255.0, 0, 255).astype(np.int32)]
+        luts.append(lut if lut is not None else master)
+    if all(lut is None for lut in luts):
+        return rgb
+    out = np.empty_like(rgb)
+    for channel, lut in enumerate(luts):
+        if lut is None:
+            out[..., channel] = rgb[..., channel]
+        else:
+            out[..., channel] = apply_lut(rgb[..., channel], lut)
     return out.astype(np.float32)
 
 
 def _angular_distance(hue_deg: Array, center: float) -> Array:
-    out: Array = np.abs((hue_deg - center + 180.0) % 360.0 - 180.0)
+    # abs + min instead of a modulo — same wrap-around distance, ~2x faster.
+    out: Array = np.abs(hue_deg - center)
+    np.minimum(out, 360.0 - out, out=out)
     return out
 
 
 def _band_weight(hue_deg: Array, center: float) -> Array:
-    out: Array = np.clip(1.0 - _angular_distance(hue_deg, center) / _BAND_HALFWIDTH, 0.0, 1.0)
-    return out
+    out = _angular_distance(hue_deg, center)
+    out *= np.float32(-1.0 / _BAND_HALFWIDTH)
+    out += np.float32(1.0)
+    return np.clip(out, 0.0, 1.0, out=out)
 
 
 def hsl(
@@ -196,6 +213,8 @@ def hsl(
     sat_mul = np.ones_like(h_deg)
     lum_add = np.zeros_like(h_deg)
     for band in HSL_BANDS:
+        if hue[band] == 0.0 and sat[band] == 0.0 and lum[band] == 0.0:
+            continue  # untouched band — skip its full-frame weight computation
         weight = _band_weight(h_deg, _HUE_CENTERS[band]) * saturation
         if hue[band] != 0.0:
             hue_shift = hue_shift + weight * (hue[band] / 100.0) * 30.0
@@ -322,10 +341,20 @@ def vignette(rgb: Array, amount: float, midpoint: float) -> Array:
     return clip01(rgb * factor[..., None])
 
 
+#: One cached unit-noise field per (shape, seed) — grain is deterministic, so the
+#: expensive RNG draw is reused across renders and only rescaled by ``amount``.
+_grain_noise: dict[tuple[int, int, int], Array] = {}
+
+
 def grain(rgb: Array, amount: float, seed: int = 1234) -> Array:
     """Add monochrome film grain."""
     if amount <= 0.0:
         return rgb
-    rng = np.random.default_rng(seed)
-    noise = rng.standard_normal(rgb.shape[:2]).astype(np.float32) * (amount / 100.0) * 0.08
-    return clip01(rgb + noise[..., None])
+    key = (rgb.shape[0], rgb.shape[1], seed)
+    noise = _grain_noise.get(key)
+    if noise is None:
+        _grain_noise.clear()  # keep at most one field resident (~8 MB at preview size)
+        rng = np.random.default_rng(seed)
+        noise = rng.standard_normal(rgb.shape[:2]).astype(np.float32)
+        _grain_noise[key] = noise
+    return clip01(rgb + (noise * ((amount / 100.0) * 0.08))[..., None])

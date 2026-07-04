@@ -1,0 +1,112 @@
+# Release pipeline: push a tag like v0.1.0 and this builds the desktop app for
+# Windows, macOS, and Linux, then attaches the artifacts to a GitHub Release.
+#
+#   Windows -> VibePhoto-Setup.exe            (Inno Setup installer, per-user)
+#   macOS   -> VibePhoto-<tag>-macos.zip      (unsigned .app bundle)
+#   Linux   -> VibePhoto-<tag>-linux-x86_64.tar.gz (one-folder bundle)
+#
+# Only the Windows installer can be built on the dev machine; the other two
+# platforms MUST be built on their own OS (PyInstaller does not cross-compile),
+# which is exactly what this workflow does.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # create the GitHub Release + upload assets
+
+jobs:
+  test:
+    name: Test (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Qt runtime libraries (offscreen tests)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libopengl0 libxkbcommon0 libglib2.0-0
+      - name: Install project
+        run: pip install -e ".[ui,raw,cv,dev]"
+      - name: Lint + types + tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          ruff check src tests
+          mypy
+          pytest -q
+
+  build-windows:
+    name: Build Windows installer
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install project + build tooling
+        run: pip install -e ".[ui,raw,cv,build]"
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+      - name: Build installer
+        run: python scripts/build_installer.py
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: VibePhoto-Setup.exe
+          generate_release_notes: true
+
+  build-macos:
+    name: Build macOS app
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install project + build tooling
+        run: pip install -e ".[ui,raw,cv,build]"
+      - name: Build .app bundle
+        run: python scripts/build_exe.py
+      - name: Zip the app bundle
+        # ditto preserves the bundle metadata Finder expects; the app is unsigned,
+        # so first launch needs right-click -> Open (documented in the README).
+        run: ditto -c -k --keepParent "dist/VibePhoto.app" "VibePhoto-${{ github.ref_name }}-macos.zip"
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: VibePhoto-${{ github.ref_name }}-macos.zip
+          generate_release_notes: true
+
+  build-linux:
+    name: Build Linux bundle
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libopengl0 libxkbcommon0 libglib2.0-0
+      - name: Install project + build tooling
+        run: pip install -e ".[ui,raw,cv,build]"
+      - name: Build bundle
+        run: python scripts/build_exe.py
+      - name: Tar the bundle
+        run: tar -czf "VibePhoto-${{ github.ref_name }}-linux-x86_64.tar.gz" -C dist VibePhoto
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: VibePhoto-${{ github.ref_name }}-linux-x86_64.tar.gz
+          generate_release_notes: true

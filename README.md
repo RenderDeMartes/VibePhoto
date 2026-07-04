@@ -91,7 +91,23 @@ they run in CI, on a server, or in a batch job without a display.
   edit settles, keeping the UI responsive on large files.
 - Copy/paste settings, edit-like-last, full undo/redo, and a **resizable** workspace.
 
-## Install
+## Download (no Python required)
+
+Prebuilt desktop packages are published on the
+[**Releases**](https://github.com/RenderDeMartes/VibePhoto/releases) page for every
+`v*` tag:
+
+| Platform | Asset | Notes |
+|----------|-------|-------|
+| **Windows** | `VibePhoto-Setup.exe` | Per-user installer (no admin), Start-Menu shortcut, clean uninstaller. Also committed at the repo root for the latest build. |
+| **macOS** | `VibePhoto-<version>-macos.zip` | Unzip → drag `VibePhoto.app` to Applications. The app is **unsigned**: on first launch right-click → *Open* (or allow it under *System Settings → Privacy & Security*). |
+| **Linux** | `VibePhoto-<version>-linux-x86_64.tar.gz` | `tar -xzf`, then run `VibePhoto/VibePhoto`. Needs standard desktop libraries (`libegl1`, `libxkbcommon0`). |
+
+The macOS and Linux packages are built by the release workflow
+([`.github/workflows/release.yml`](.github/workflows/release.yml)) — PyInstaller cannot
+cross-compile, so each platform builds on its own runner.
+
+## Install from source
 
 Requires **Python 3.12+**.
 
@@ -106,7 +122,7 @@ python -m venv .venv
 pip install -e .
 
 # Full desktop app (UI + RAW decoding):
-pip install -e ".[ui,raw]"
+pip install -e ".[ui,raw,cv]"
 ```
 
 RAW decoding uses LibRaw via `rawpy` (the `raw` extra). Without it the app still runs
@@ -128,18 +144,50 @@ and falls back to embedded previews for RAW files.
 python -m vibephoto          # launch the desktop app (needs the [ui] extra)
 ```
 
-## Build a Windows installer
+## Build the desktop packages yourself
 
 ```bash
-pip install -e ".[ui,raw,build]"
-python scripts/build_exe.py          # 1) PyInstaller bundle  -> dist/VibePhoto/
-python scripts/build_installer.py    # 2) full installer      -> dist/VibePhoto-Setup-<version>.exe
+pip install -e ".[ui,raw,cv,build]"
+python scripts/build_exe.py          # PyInstaller one-folder bundle -> dist/VibePhoto/
+```
+
+The same spec builds on every platform (macOS additionally produces
+`dist/VibePhoto.app`). PyInstaller does **not** cross-compile — build on the OS you are
+targeting.
+
+**Windows installer** (extra step):
+
+```bash
+python scripts/build_installer.py    # -> VibePhoto-Setup.exe (repo root)
 ```
 
 `build_installer.py` builds the bundle and then compiles `packaging/VibePhoto.iss` with
 the **Inno Setup** compiler (free — install from <https://jrsoftware.org/isdl.php>). The
 result is a single `setup.exe` that installs per-user (no admin required) with Start-Menu
 and optional desktop shortcuts and a clean uninstaller.
+
+**macOS**: zip the app bundle — `ditto -c -k --keepParent dist/VibePhoto.app VibePhoto-macos.zip`.
+**Linux**: tar the folder — `tar -czf VibePhoto-linux-x86_64.tar.gz -C dist VibePhoto`.
+
+## Releasing
+
+Releases are built by CI ([`release.yml`](.github/workflows/release.yml)) from a version
+tag — one command chain publishes all three platforms:
+
+```bash
+# 1. Bump the version in pyproject.toml AND src/vibephoto/__init__.py, commit.
+# 2. Rebuild + commit the Windows installer (kept current in the repo root):
+python scripts/build_installer.py
+git add -A && git commit -m "Release vX.Y.Z"
+
+# 3. Tag and push — the tag triggers the release workflow:
+git tag vX.Y.Z
+git push origin main --tags
+```
+
+CI then runs lint/types/tests, builds the Windows installer, the macOS `.app` zip, and
+the Linux tarball, creates the GitHub Release for the tag, and attaches all three
+artifacts with auto-generated release notes.
 
 ## Architecture
 
@@ -164,7 +212,7 @@ The full design lives in [`docs/`](docs/).
 ## Development
 
 ```bash
-pip install -e ".[ui,raw,dev]"
+pip install -e ".[ui,raw,cv,dev]"
 
 pytest                 # 349 tests
 ruff check src tests   # lint

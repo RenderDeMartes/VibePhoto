@@ -14,7 +14,18 @@ import math
 import numpy as np
 from numpy.typing import NDArray
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QImage, QMouseEvent, QPainter, QPen, QPixmap, QWheelEvent
+from PySide6.QtGui import (
+    QColor,
+    QCursor,
+    QImage,
+    QMouseEvent,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+    QPolygonF,
+    QWheelEvent,
+)
 from PySide6.QtWidgets import QWidget
 
 from vibephoto.processing.mask import Mask
@@ -22,6 +33,7 @@ from vibephoto.ui.crop_overlay import (
     crop_handles,
     drag_crop_handle,
     hit_crop_handle,
+    in_rotate_zone,
     inside_crop,
     move_crop,
 )
@@ -35,6 +47,8 @@ from vibephoto.ui.mask_overlay import (
 from vibephoto.ui.overlays import Overlay, draw_overlay
 
 _MAX_ZOOM = 8.0
+_CROP_MIN_ZOOM = 0.4  # in crop mode, zoom *out* past fit so corner handles get margin
+_ROTATE_SNAP = 5.0  # Shift while rotating snaps to this increment (incl. back to 0°)
 
 
 def ndarray_to_qimage(arr: NDArray[np.uint8]) -> QImage:
@@ -43,6 +57,45 @@ def ndarray_to_qimage(arr: NDArray[np.uint8]) -> QImage:
     height, width = contiguous.shape[0], contiguous.shape[1]
     image = QImage(contiguous.data, width, height, 3 * width, QImage.Format.Format_RGB888)
     return image.copy()  # detach from the NumPy buffer so Qt owns the pixels
+
+
+def _build_rotate_cursor() -> QCursor:
+    """Draw a circular-arrow cursor (white fill, dark outline so it reads on any image)."""
+    size = 30
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    cx = cy = size / 2.0
+    radius = (size - 12) / 2.0
+    start, sweep = 70.0, 240.0  # an open ring with a gap for the arrowhead
+    box = QRectF(cx - radius, cy - radius, 2 * radius, 2 * radius)
+    arc = QPainterPath()
+    arc.arcMoveTo(box, start)
+    arc.arcTo(box, start, sweep)
+    # Arrowhead at the arc's end, pointing along the (counter-clockwise) tangent.
+    end = math.radians(start + sweep)
+    ex, ey = cx + radius * math.cos(end), cy - radius * math.sin(end)
+    tx, ty = -math.sin(end), -math.cos(end)  # CCW tangent in screen (y-down) coords
+
+    def _wing(degrees: float) -> QPointF:
+        a = math.radians(degrees)
+        wx = tx * math.cos(a) - ty * math.sin(a)
+        wy = tx * math.sin(a) + ty * math.cos(a)
+        return QPointF(ex + wx * 7.0, ey + wy * 7.0)
+
+    head = QPolygonF([QPointF(ex, ey), _wing(150), _wing(-150)])
+    for color, width in ((QColor(0, 0, 0, 210), 4.0), (QColor(255, 255, 255), 2.0)):
+        pen = QPen(color, width)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(arc)
+    painter.setPen(QPen(QColor(0, 0, 0, 210), 1.0))
+    painter.setBrush(QColor(255, 255, 255))
+    painter.drawPolygon(head)
+    painter.end()
+    return QCursor(pixmap, int(cx), int(cy))
 
 
 class DevelopCanvas(QWidget):
@@ -86,6 +139,7 @@ class DevelopCanvas(QWidget):
         self._crop_rot_base = 0.0
         self._crop_rot_mouse0 = 0.0
         self._crop_last = (0.0, 0.0)
+        self._rot_cursor: QCursor | None = None  # lazily-built rotation-icon cursor
         self.setMinimumSize(360, 300)
         self.setStyleSheet("background:#0e0f11;")
         self.setMouseTracking(True)
@@ -94,6 +148,11 @@ class DevelopCanvas(QWidget):
 
     def set_images(self, after: QImage, before: QImage) -> None:
         self._after = QPixmap.fromImage(after)
+        self._before = QPixmap.fromImage(before)
+        self.update()
+
+    def set_before(self, before: QImage) -> None:
+        """Refresh only the Before frame (an async Before recompute landed)."""
         self._before = QPixmap.fromImage(before)
         self.update()
 
@@ -154,8 +213,12 @@ class DevelopCanvas(QWidget):
         self._pan = QPointF(0.0, 0.0)
         self._after_zoom_change()
 
+    def _min_zoom(self) -> float:
+        """Lowest zoom allowed: below fit while cropping, else fit-to-window."""
+        return _CROP_MIN_ZOOM if self._crop_mode else 1.0
+
     def _set_zoom(self, zoom: float) -> None:
-        self._zoom = max(1.0, min(_MAX_ZOOM, zoom))
+        self._zoom = max(self._min_zoom(), min(_MAX_ZOOM, zoom))
         self._after_zoom_change()
 
     def _after_zoom_change(self) -> None:
@@ -200,7 +263,7 @@ class DevelopCanvas(QWidget):
         if pixmap.isNull():
             return
         factor = 1.25 if event.angleDelta().y() > 0 else 1 / 1.25
-        new_zoom = max(1.0, min(_MAX_ZOOM, self._zoom * factor))
+        new_zoom = max(self._min_zoom(), min(_MAX_ZOOM, self._zoom * factor))
         if new_zoom == self._zoom:
             return
         rect = self._display_rect(pixmap)
@@ -308,6 +371,10 @@ class DevelopCanvas(QWidget):
         self._crop_handle = None
         self._crop_moving = False
         self._crop_rotating = False
+        if not active and self._zoom < 1.0:
+            self._zoom = 1.0  # don't leak a cropped-out zoom into normal viewing
+            self._pan = QPointF(0.0, 0.0)
+            self.zoom_changed.emit(self._zoom)
         if active:
             self.setCursor(Qt.CursorShape.CrossCursor)
         else:
@@ -333,10 +400,12 @@ class DevelopCanvas(QWidget):
         if inside_crop(self._crop_rect, nx, ny):
             self._crop_moving = True
             self._crop_last = (nx, ny)
-        else:  # outside the box → rotate (Photoshop-style straighten)
+        elif in_rotate_zone(self._crop_rect, nx, ny):  # near a corner, outside → rotate
             self._crop_rotating = True
             self._crop_rot_base = self._crop_angle
             self._crop_rot_mouse0 = self._angle_at(nx, ny)
+            self.setCursor(self._rotate_cursor())
+        # Outside the box but not near a corner: ignore (no rotate, no pan).
         return True
 
     def _crop_move(self, event: QMouseEvent) -> bool:
@@ -347,7 +416,15 @@ class DevelopCanvas(QWidget):
             return True
         nx, ny = point
         if self._crop_handle is not None:
-            self._crop_rect = drag_crop_handle(self._crop_rect, self._crop_handle, nx, ny)
+            mods = event.modifiers()
+            self._crop_rect = drag_crop_handle(
+                self._crop_rect,
+                self._crop_handle,
+                nx,
+                ny,
+                lock_aspect=bool(mods & Qt.KeyboardModifier.ShiftModifier),
+                from_center=bool(mods & Qt.KeyboardModifier.AltModifier),
+            )
             self.update()
         elif self._crop_moving:
             dx, dy = nx - self._crop_last[0], ny - self._crop_last[1]
@@ -356,9 +433,31 @@ class DevelopCanvas(QWidget):
             self.update()
         elif self._crop_rotating:
             delta = self._angle_at(nx, ny) - self._crop_rot_mouse0
-            self._crop_angle = max(-45.0, min(45.0, self._crop_rot_base - delta))
+            angle = self._crop_rot_base - delta
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                angle = round(angle / _ROTATE_SNAP) * _ROTATE_SNAP  # snap (incl. 0°)
+            self._crop_angle = max(-45.0, min(45.0, angle))
             self.crop_rotated.emit(self._crop_angle)  # module re-renders the rotated image
+        else:
+            self._update_crop_cursor(nx, ny)  # hover feedback (resize / rotate / move)
         return True
+
+    def _update_crop_cursor(self, nx: float, ny: float) -> None:
+        """Reflect what a press would do here: resize a handle, rotate, or move."""
+        if hit_crop_handle(self._crop_rect, nx, ny) is not None:
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
+        elif inside_crop(self._crop_rect, nx, ny):
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+        elif in_rotate_zone(self._crop_rect, nx, ny):
+            self.setCursor(self._rotate_cursor())  # near a corner → rotate
+        else:
+            self.setCursor(Qt.CursorShape.ArrowCursor)  # dead zone: nothing happens
+
+    def _rotate_cursor(self) -> QCursor:
+        """A curved-arrow cursor signalling rotate (built once, then cached)."""
+        if self._rot_cursor is None:
+            self._rot_cursor = _build_rotate_cursor()
+        return self._rot_cursor
 
     def _crop_release(self) -> bool:
         if not self._crop_mode:

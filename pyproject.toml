@@ -47,7 +47,11 @@ dependencies = [
 ui = ["PySide6>=6.6", "pytest-qt>=4.4"]
 # RAW decode + computer-vision pipeline. These ship wheels but are large.
 raw = ["rawpy>=0.19"]
-cv = ["opencv-python>=4.9"]
+# Headless build: the GUI-enabled opencv-python bundles its own Qt, which clashes
+# with PySide6 in the frozen app. The processing layer auto-detects cv2 and uses
+# its SIMD/multithreaded kernels (blur, HSV, resize, warp) — 4-30x faster than the
+# NumPy fallbacks on the develop hot path, so ship it in the desktop bundle.
+cv = ["opencv-python-headless>=4.9"]
 # OpenImageIO has no universal wheel; documented as an external/system dep.
 oiio = ["OpenImageIO>=2.5"]
 dev = [

@@ -151,6 +151,19 @@ def test_canvas_crop_drag_rotate_emits_angle(qapp: QApplication) -> None:
     assert canvas._angle_at(0.5, 0.9) > 0.0  # below centre = positive angle
 
 
+def test_canvas_crop_mode_allows_zoom_out_past_fit(qapp: QApplication) -> None:
+    from vibephoto.ui.develop_canvas import DevelopCanvas
+
+    canvas = DevelopCanvas()
+    assert canvas._min_zoom() == 1.0  # normal viewing never goes below fit
+    canvas.set_crop_mode(True, (0.1, 0.1, 0.9, 0.9))
+    assert canvas._min_zoom() < 1.0  # crop gives margin so corners are grabbable
+    canvas._set_zoom(0.5)
+    assert canvas._zoom == pytest.approx(0.5)
+    canvas.set_crop_mode(False)  # leaving crop snaps framing back to fit
+    assert canvas._zoom == 1.0
+
+
 # -- canvas mask editing --------------------------------------------------- #
 
 
@@ -202,32 +215,35 @@ def test_mask_panel_set_masks_loads_without_emitting(qapp: QApplication) -> None
     assert panel._list.count() == 2
 
 
-# -- crop panel ------------------------------------------------------------ #
+# -- crop footer controls --------------------------------------------------- #
 
 
-def test_crop_panel_centered_aspect_math() -> None:
-    from vibephoto.ui.crop_panel import centered_crop
+def test_footer_crop_toggle_shows_controls(qapp: QApplication) -> None:
+    from vibephoto.ui.develop_footer import DevelopFooter
 
-    # A wide (2:1) image cropped to 1:1 keeps full height, insets the sides.
-    left, top, right, bottom = centered_crop(2.0, 1.0)
-    assert (top, bottom) == (0.0, 1.0)
-    assert abs(left - 0.25) < 1e-6 and abs(right - 0.75) < 1e-6
-    # Original = whole frame.
-    assert centered_crop(2.0, None) == (0.0, 0.0, 1.0, 1.0)
+    footer = DevelopFooter()
+    seen: list[bool] = []
+    footer.crop_toggled.connect(lambda active: seen.append(active))
+    assert footer.crop_active is False
+    footer.set_crop_active(True)  # what the R / T shortcut calls
+    assert footer.crop_active is True
+    assert seen == [True]
+    for widget in footer._crop_controls:
+        assert not widget.isHidden()  # shown while cropping (window may be offscreen)
+    footer.set_crop_active(False)  # what V calls
+    assert footer.crop_active is False
+    assert seen == [True, False]
 
 
-def test_crop_panel_emits_geometry(qapp: QApplication) -> None:
-    from vibephoto.processing.geometry import Geometry
-    from vibephoto.ui.crop_panel import CropPanel
+def test_footer_crop_reset_emits(qapp: QApplication) -> None:
+    from vibephoto.ui.develop_footer import DevelopFooter
 
-    panel = CropPanel()
-    panel.set_image_aspect(2.0)
-    seen: list[Geometry] = []
-    panel.geometry_changed.connect(lambda g: seen.append(g))
-    panel._set_aspect(1.0)
-    assert seen and abs(seen[-1].left - 0.25) < 1e-6
-    panel._on_angle(50)  # 5.0°
-    assert abs(seen[-1].angle - 5.0) < 1e-6
+    footer = DevelopFooter()
+    fired: list[int] = []
+    footer.crop_reset_requested.connect(lambda: fired.append(1))
+    footer.set_crop_active(True)
+    footer._crop_controls[-1].click()  # the "Reset" text button
+    assert fired == [1]
 
 
 # -- slider stepper buttons ------------------------------------------------ #

@@ -191,8 +191,11 @@ def tonemap(rgb: Array) -> Array:
     and the rest of the look stack on top downstream.
     """
     x = _shadow_toe(np.maximum(rgb, 0.0))
-    over = np.maximum(x - _SHOULDER_KNEE, 0.0)
-    headroom = 1.0 - _SHOULDER_KNEE
-    compressed = _SHOULDER_KNEE + headroom * (1.0 - np.exp(-over / headroom))
-    shouldered = np.where(x > _SHOULDER_KNEE, compressed, x).astype(np.float32)
-    return linear_to_srgb(shouldered)
+    # The exp shoulder only matters above the knee — evaluate it just for those
+    # pixels (typically a small highlight fraction) instead of the whole frame.
+    over_mask = x > _SHOULDER_KNEE
+    if over_mask.any():
+        headroom = 1.0 - _SHOULDER_KNEE
+        over = x[over_mask] - _SHOULDER_KNEE
+        x[over_mask] = _SHOULDER_KNEE + headroom * (1.0 - np.exp(-over / headroom))
+    return linear_to_srgb(x)

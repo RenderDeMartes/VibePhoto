@@ -56,9 +56,21 @@ class ImportRunnable(QRunnable):
         self.signals.finished.emit(result)
 
     def _warm_thumbnails(self) -> None:
+        """Generate missing thumbnails in parallel — decode/resize/encode release
+        the GIL, so a thread pool cuts a big import's warm-up several-fold."""
+        import os
+        from concurrent.futures import ThreadPoolExecutor
+
+        jobs: list[tuple[Path, str]] = []
         for photo in self._catalog.photos.list_all():
             if not photo.content_hash:
                 continue
             source = self._catalog.resolve_path(photo)
             if source is not None and source.exists():
-                self._thumbnails.get_or_create(source, photo.content_hash)
+                jobs.append((source, photo.content_hash))
+        if not jobs:
+            return
+        workers = min(len(jobs), max(2, (os.cpu_count() or 4) - 1))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for source, key in jobs:
+                pool.submit(self._thumbnails.get_or_create, source, key)

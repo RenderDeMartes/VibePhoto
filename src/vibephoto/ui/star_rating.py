@@ -40,7 +40,7 @@ class StarRating(QWidget):
         self._hover = 0
         self.setMouseTracking(True)
         self.setFixedSize(5 * _STAR + 4 * _GAP, _STAR)
-        self.setToolTip("Rate this photo (click a star; 1-5 also work on the grid)")
+        self.setToolTip("Rate this photo (click a star, or press 1-5; 0 clears)")
 
     def set_rating(self, rating: int) -> None:
         self._rating = max(0, min(5, rating))

@@ -36,7 +36,6 @@ from vibephoto.processing.edit_state import HSL_BANDS, EditState
 from vibephoto.processing.layers import LayerStack
 from vibephoto.processing.profiles import PROFILE_NAMES
 from vibephoto.ui.color_wheels import ColorGradingPanel
-from vibephoto.ui.crop_panel import CropPanel
 from vibephoto.ui.curve_editor import ToneCurveEditor
 from vibephoto.ui.histogram import HistogramWidget
 from vibephoto.ui.layers_panel import LayersPanel
@@ -338,7 +337,6 @@ class AdjustmentsPanel(QWidget):
     layer_added = Signal()
     layer_removed = Signal()
     layer_toggled = Signal(int, bool)
-    geometry_changed = Signal(object)  # Geometry (crop + straighten)
     masks_changed = Signal(object)  # list[Mask] for the active layer
     profile_chosen = Signal(str)  # creative/camera base look
     lens_profile_chosen = Signal(str)  # lens-correction profile name
@@ -451,9 +449,6 @@ class AdjustmentsPanel(QWidget):
         self.curve_editor.curve_changed.connect(self.curve_changed.emit)
         self.grade_panel = ColorGradingPanel()
         self.grade_panel.param_changed.connect(self.param_changed.emit)
-        # Crop & Straighten (photo-level geometry).
-        self.crop_panel = CropPanel()
-        self.crop_panel.geometry_changed.connect(self.geometry_changed.emit)
         # Masks (per-layer local adjustments).
         self.mask_panel = MaskPanel()
         self.mask_panel.masks_changed.connect(self.masks_changed.emit)
@@ -466,7 +461,7 @@ class AdjustmentsPanel(QWidget):
 
         groups = {group[0]: group for group in PARAM_GROUPS}
         # a familiar, professional order, interleaving the graph sections with the sliders.
-        self._add_widget_section(outer, "Crop & Straighten", self.crop_panel, SIMPLE)
+        # Crop & straighten is the on-canvas free crop tool (footer ⌗ / R / T), not a panel.
         self._add_widget_section(outer, "Masks", self.mask_panel, INTERMEDIATE)
         self._wb_section = self._add_widget_section(
             outer, "White Balance", self.white_balance, SIMPLE, expanded=True

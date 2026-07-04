@@ -82,6 +82,7 @@ class DevelopFooter(QWidget):
     crop_toggled = Signal(bool)
     rotate90_requested = Signal(int)  # +1 = CCW, -1 = CW quarter-turn
     straighten_changed = Signal(float)  # degrees, -45..45
+    crop_reset_requested = Signal()  # back to the full frame, no rotation
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -120,9 +121,13 @@ class DevelopFooter(QWidget):
         zoom_in = _tool_button("+", "Zoom in")
         zoom_in.clicked.connect(self.zoom_in_requested.emit)
 
-        # Crop tool: a toggle, plus 90° rotate + straighten controls shown only while
-        # cropping (so the footer stays tidy the rest of the time).
-        self._crop_btn = _tool_button("⌗", "Crop & rotate", checkable=True)
+        # Crop tool: a toggle, plus 90° rotate + straighten + reset controls shown only
+        # while cropping (so the footer stays tidy the rest of the time). The free crop
+        # itself is drag-on-canvas: drag a handle to resize to any aspect, drag inside
+        # to move, drag outside the box to rotate.
+        self._crop_btn = _tool_button(
+            "⌗", "Crop & rotate (R / T to enter, V for mouse)", checkable=True
+        )
         self._crop_btn.toggled.connect(self._on_crop_toggled)
         rot_ccw = _tool_button("⟲", "Rotate 90° counter-clockwise")
         rot_ccw.clicked.connect(lambda: self.rotate90_requested.emit(1))
@@ -134,7 +139,9 @@ class DevelopFooter(QWidget):
         self._straighten.setFixedWidth(90)
         self._straighten.setToolTip("Straighten (degrees)")
         self._straighten.valueChanged.connect(lambda v: self.straighten_changed.emit(v / 10.0))
-        self._crop_controls = (rot_ccw, rot_cw, self._straighten)
+        crop_reset = _text_button("Reset", "Reset crop to the full frame")
+        crop_reset.clicked.connect(self.crop_reset_requested.emit)
+        self._crop_controls = (rot_ccw, rot_cw, self._straighten, crop_reset)
         for widget in self._crop_controls:
             widget.setVisible(False)
 
@@ -156,6 +163,7 @@ class DevelopFooter(QWidget):
         layout.addWidget(rot_ccw)
         layout.addWidget(rot_cw)
         layout.addWidget(self._straighten)
+        layout.addWidget(crop_reset)
         layout.addWidget(_separator())
         layout.addWidget(self._overlay)
         layout.addWidget(self._opacity)
@@ -188,6 +196,11 @@ class DevelopFooter(QWidget):
     @property
     def crop_active(self) -> bool:
         return self._crop_btn.isChecked()
+
+    def set_crop_active(self, active: bool) -> None:
+        """Enter/leave crop from a shortcut (R/T enter, V exits); no-op if unchanged."""
+        if self._crop_btn.isChecked() != active:
+            self._crop_btn.setChecked(active)  # toggled → _on_crop_toggled fires
 
     def set_rating(self, rating: int) -> None:
         self._stars.set_rating(rating)

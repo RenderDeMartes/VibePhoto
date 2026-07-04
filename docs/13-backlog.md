@@ -18,12 +18,14 @@ RAW/colour work, run the gated end-to-end test with
   `Geometry` (crop rect + straighten angle) on `LayerStack` (not per-layer EditState),
   applied to the base before the layer stack (`geometry.apply_geometry`,
   `layered_renderer`); serialised in the stack; Before view + all-layers-off both
-  reflect the crop. UI = `ui/crop_panel.py` (centred aspect presets + straighten
-  slider) **and an on-canvas crop tool**: a footer Crop toggle (`develop_footer`)
-  shows the uncropped frame with a draggable crop rectangle (corners/edges/move,
-  rule-of-thirds grid, dimmed surround — `ui/crop_overlay.py` + `DevelopCanvas`),
-  90° rotate buttons (`Geometry.rotate90`), and a straighten slider. *Still ahead:*
-  free-rotate handle + flip.
+  reflect the crop. UI = a free on-canvas crop tool only (the old centred-aspect
+  `ui/crop_panel.py` was removed 2026-06-29 in favour of full freedom): a footer Crop
+  toggle (`develop_footer`), also entered with **R / T** and exited with **V**, shows
+  the uncropped frame with a draggable crop rectangle — drag a handle to resize to any
+  aspect, drag inside to move, drag outside the box to rotate (corners/edges/move,
+  rule-of-thirds grid, dimmed surround — `ui/crop_overlay.py` + `DevelopCanvas`). Footer
+  also has 90° rotate buttons (`Geometry.rotate90`), a straighten slider, and Reset.
+  *Still ahead:* flip.
 - **Local adjustments / masking** — *Engine done (tested):* `processing/mask.py`
   (`Mask` with `radial` / `linear` / `brush` coverage, add/subtract `combined_coverage`,
   `blend_masked`); `EditLayer.masks` is serialised; `layered_renderer._compose_layer`

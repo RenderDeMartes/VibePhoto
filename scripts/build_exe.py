@@ -1,11 +1,13 @@
-"""Build the Vibe Photo Windows executable with PyInstaller.
+"""Build the Vibe Photo executable with PyInstaller (Windows, macOS, or Linux).
 
 Usage::
 
     python scripts/build_exe.py
 
 Produces a one-folder bundle at ``dist/VibePhoto/`` whose launcher is
-``dist/VibePhoto/VibePhoto.exe``. Requires the build tooling::
+``dist/VibePhoto/VibePhoto.exe`` on Windows and ``dist/VibePhoto/VibePhoto``
+elsewhere (macOS additionally gets ``dist/VibePhoto.app``). Requires the build
+tooling::
 
     pip install -e .[build]
 
@@ -21,7 +23,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = ROOT / "packaging" / "VibePhoto.spec"
-EXE = ROOT / "dist" / "VibePhoto" / "VibePhoto.exe"
+_LAUNCHER = "VibePhoto.exe" if sys.platform == "win32" else "VibePhoto"
+EXE = ROOT / "dist" / "VibePhoto" / _LAUNCHER
 
 
 def main() -> int:

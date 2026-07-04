@@ -23,6 +23,11 @@ from PIL import Image
 
 from vibephoto.processing.image_buffer import ImageBuffer
 
+try:  # OpenCV warpAffine rotates all channels in one SIMD multithreaded pass.
+    import cv2
+except ImportError:  # pragma: no cover - exercised on installs without the cv extra
+    cv2 = None  # type: ignore[assignment]
+
 
 @dataclass
 class Geometry:
@@ -91,9 +96,22 @@ def _clamp01(value: Any) -> float:
 def _rotate(data: np.ndarray, angle: float) -> np.ndarray:
     """Rotate ``(H, W, 3)`` float data by ``angle`` degrees, keeping the frame size.
 
-    Bicubic, per-channel in PIL ``F`` mode so linear values survive; corners that
-    rotate out of frame are filled with 0 (the crop is expected to exclude them).
+    Bicubic in float so linear values survive; corners that rotate out of frame
+    are filled with 0 (the crop is expected to exclude them). OpenCV rotates all
+    channels in one pass when available; per-channel PIL ``F`` mode otherwise.
     """
+    if cv2 is not None:
+        height, width = data.shape[0], data.shape[1]
+        matrix = cv2.getRotationMatrix2D(((width - 1) / 2.0, (height - 1) / 2.0), angle, 1.0)
+        rotated = cv2.warpAffine(
+            np.ascontiguousarray(data, dtype=np.float32),
+            matrix,
+            (width, height),
+            flags=cv2.INTER_CUBIC,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0.0,
+        )
+        return np.ascontiguousarray(rotated)
     channels = [
         np.asarray(
             Image.fromarray(data[..., c], mode="F").rotate(

@@ -40,7 +40,7 @@ from vibephoto.processing.engine import DevelopEngine
 from vibephoto.processing.geometry import Geometry, apply_geometry
 from vibephoto.processing.history import EditHistory
 from vibephoto.processing.image_buffer import ImageBuffer
-from vibephoto.processing.layered_renderer import LayerRenderer, render_stack
+from vibephoto.processing.layered_renderer import LayerRenderer
 from vibephoto.processing.layers import LayerStack
 from vibephoto.processing.lens_store import LensProfileStore
 from vibephoto.processing.pipeline import PipelineRenderer
@@ -106,14 +106,24 @@ class DevelopModule(ModuleView):
         #: fast image rotate with no develop pipeline (just geometry).
         self._crop_base: ImageBuffer | None = None
 
-        # Background full render: keeps the crisp full-resolution render off the UI
-        # thread so dragging stays smooth. A generation counter coalesces results so a
-        # stale render (superseded by a newer edit) is dropped instead of flashing in.
+        # Background work pool: photo decode + every full-resolution render run here,
+        # never on the UI thread. One thread serialises the heavy jobs, so the
+        # persistent full-res renderer's memoization cache is never touched
+        # concurrently. Generation counters coalesce results: a stale render or a
+        # stale photo load (superseded by a newer action) is dropped, not flashed in.
         self._render_pool = QThreadPool(self)
         self._render_pool.setMaxThreadCount(1)  # serialise heavy renders
+        # Decodes get their own single thread: a photo load is never queued behind
+        # (or dropped with) superseded render tasks, and vice versa.
+        self._load_pool = QThreadPool(self)
+        self._load_pool.setMaxThreadCount(1)
         self._render_signals = _RenderSignals()
         self._render_signals.done.connect(self._on_full_rendered)
+        self._render_signals.loaded.connect(self._on_photo_loaded)
+        self._render_signals.before_ready.connect(self._on_before_ready)
         self._render_gen = 0
+        self._load_gen = 0
+        self._before_gen = 0
         self._render_busy = False
 
         # Smart previews: a fast low-res proxy renders live while editing, then the
@@ -157,7 +167,6 @@ class DevelopModule(ModuleView):
         self._panel.layer_added.connect(self._on_layer_added)
         self._panel.layer_removed.connect(self._on_layer_removed)
         self._panel.layer_toggled.connect(self._on_layer_toggled)
-        self._panel.geometry_changed.connect(self._on_geometry_changed)
         self._panel.masks_changed.connect(self._on_masks_changed)
         self._panel.mask_panel.mask_selected.connect(self._canvas.set_mask_edit)
         self._canvas.mask_edited.connect(self._on_mask_edited)
@@ -186,6 +195,7 @@ class DevelopModule(ModuleView):
         self._footer.crop_toggled.connect(self._on_crop_toggled)
         self._footer.rotate90_requested.connect(self._on_rotate90)
         self._footer.straighten_changed.connect(self._on_straighten)
+        self._footer.crop_reset_requested.connect(self._on_crop_reset)
         self._canvas.crop_changed.connect(self._on_crop_rect_changed)
         self._canvas.crop_rotated.connect(self._on_crop_rotated)
         self._canvas.zoom_changed.connect(self._footer.set_zoom_label)
@@ -223,9 +233,22 @@ class DevelopModule(ModuleView):
         root.addWidget(self._panel)
 
         self._add_shortcut(QKeySequence(Qt.Key.Key_Backslash), self._before_btn.toggle)
+        # R or T enter the free crop tool; V returns to the mouse (pan / mask edit).
+        self._add_shortcut(QKeySequence(Qt.Key.Key_R), lambda: self._set_crop(True))
+        self._add_shortcut(QKeySequence(Qt.Key.Key_T), lambda: self._set_crop(True))
+        self._add_shortcut(QKeySequence(Qt.Key.Key_V), lambda: self._set_crop(False))
+        # F re-centres the view to fit-to-window (handy after scrolling out in crop).
+        self._add_shortcut(QKeySequence(Qt.Key.Key_F), self._canvas.reset_view)
         self._add_shortcut(QKeySequence(QKeySequence.StandardKey.Undo), self._undo)
         self._add_shortcut(QKeySequence(QKeySequence.StandardKey.Redo), self._redo)
         self._add_shortcut(QKeySequence("Ctrl+Shift+Z"), self._redo)
+        # 1-5 set the star rating, 0 clears it — same keys as the Library grid.
+        for stars in range(6):
+
+            def _rate(s: int = stars) -> None:
+                self._rate_by_key(s)
+
+            self._add_shortcut(QKeySequence(str(stars)), _rate)
 
     def _add_shortcut(self, sequence: QKeySequence, slot: Callable[[], object]) -> None:
         QShortcut(sequence, self).activated.connect(slot)
@@ -233,7 +256,13 @@ class DevelopModule(ModuleView):
     # -- public API --------------------------------------------------------- #
 
     def load_photo(self, photo: Photo) -> None:
-        """Open ``photo`` for editing, restoring its saved layer stack."""
+        """Open ``photo`` for editing, restoring its saved layer stack.
+
+        The decode (LibRaw for RAW — seconds of work) and the first renders run on
+        the background pool; the UI stays responsive and simply shows a loading
+        title until :meth:`_on_photo_loaded` wires the results in. A newer
+        ``load_photo`` bumps the load generation, so a stale decode is discarded.
+        """
         if (
             self._renderer is not None
             and self._photo is not None
@@ -248,34 +277,56 @@ class DevelopModule(ModuleView):
             self._set_unavailable(f"{photo.filename} — file offline")
             return
 
-        renderer = self._engine.open_layered(path, is_raw=photo.is_raw)
-        if renderer is None:
-            self._set_unavailable(f"{photo.filename} — could not decode")
-            return
-
-        self._renderer = renderer
-        self._proxy_renderer = _make_proxy(renderer.base, _PROXY_EDGE)
-        self._render_gen += 1  # invalidate any in-flight render for the previous photo
+        # Pause editing while the decode is in flight; keep panels in sync with the
+        # restored stack immediately so the UI doesn't show stale slider values.
+        self._renderer = None
+        self._proxy_renderer = None
+        self._render_gen += 1
+        self._before_gen += 1  # a stale Before from the previous photo must not land
         self._render_busy = False
+        self._busy_changed()
         self._stack = self._store.load(photo.id) if photo.id is not None else LayerStack.single()
         self._history.reset(self._stack)
-        # "Before" is the unedited *develop* (identity edit) — for RAW that means the
-        # tone-mapped scene-linear base, not the dark linear pixels themselves. Cache
-        # the buffer too: Auto Edit analyses it as a stable original-state reference.
-        self._recompute_before()
-        self._preview_base = downscale_buffer(renderer.base, _PREVIEW_EDGE)
-        self._panel.crop_panel.set_image_aspect(renderer.base.width / max(1, renderer.base.height))
-        self._panel.preset_browser.set_render_callback(self._render_preset_preview)
-        self._panel.set_raw_mode(photo.is_raw)  # Kelvin WB panel only for RAW
-        # Calibrate the WB slider to this camera's true as-shot temperature.
-        as_shot = self._raw_service.as_shot_temperature(path) if photo.is_raw else None
-        self._panel.white_balance.set_reference(as_shot or WB_REFERENCE_K)
         self._canvas.set_pick_mode(False)
+        self._canvas.set_mask_edit(None)
         self._panel.white_balance.set_picking(False)
+        self._panel.set_raw_mode(photo.is_raw)  # Kelvin WB panel only for RAW
         self._sync_panel()
         self._footer.set_rating(photo.rating)
+        self._title.setText(f"{photo.filename} — loading…")
+
+        self._load_gen += 1
+        task = _LoadTask(
+            self._engine,
+            self._raw_service,
+            path,
+            photo.is_raw,
+            self._stack.geometry.copy(),
+            self._load_gen,
+            self._render_signals,
+        )
+        self._load_pool.start(task)
+
+    def _on_photo_loaded(self, generation: int, payload: object) -> None:
+        """A background photo decode finished — wire it in if it is still wanted."""
+        if generation != self._load_gen or self._photo is None:
+            return  # superseded by a newer load (or the module was cleared)
+        if not isinstance(payload, _LoadedPhoto):
+            self._set_unavailable(f"{self._photo.filename} — could not decode")
+            return
+        self._renderer = payload.renderer
+        self._proxy_renderer = payload.proxy_renderer
+        # "Before" is the unedited *develop* (identity edit) — for RAW that means the
+        # tone-mapped scene-linear base, not the dark linear pixels themselves. The
+        # buffer doubles as Auto Edit's stable original-state reference.
+        self._before_buffer = payload.before_buffer
+        self._before_qimage = payload.before_qimage
+        self._preview_base = payload.preview_base
+        self._panel.preset_browser.set_render_callback(self._render_preset_preview)
+        # Calibrate the WB slider to this camera's true as-shot temperature.
+        self._panel.white_balance.set_reference(payload.as_shot_kelvin or WB_REFERENCE_K)
         self._canvas.reset_view()
-        self._title.setText(photo.filename)
+        self._title.setText(self._photo.filename)
         self._render_full()
 
     def commit(self) -> None:
@@ -424,6 +475,13 @@ class DevelopModule(ModuleView):
             self._catalog.photos.set_rating(self._photo.id, rating)
             self._photo.rating = rating
 
+    def _rate_by_key(self, rating: int) -> None:
+        """Keyboard rating (0-5): update the footer stars and persist."""
+        if self._photo is None:
+            return
+        self._footer.set_rating(rating)  # set_rating does not re-emit — no double save
+        self._on_rating(rating)
+
     def _on_edit_like_last(self) -> None:
         if self._renderer is None:
             return
@@ -473,15 +531,6 @@ class DevelopModule(ModuleView):
         self._render_full()
         self._save_timer.start()
 
-    def _on_geometry_changed(self, geometry: object) -> None:
-        """Apply a new crop/straighten (photo-level) and re-render Before + After."""
-        if self._renderer is None or not isinstance(geometry, Geometry):
-            return
-        self._stack.geometry = geometry
-        self._recompute_before()  # Before is cropped too, so the comparison matches
-        self._render_full()
-        self._persist()
-
     def _on_masks_changed(self, masks: object) -> None:
         """Update the active layer's local-adjustment masks and re-render."""
         if self._renderer is None or not isinstance(masks, list):
@@ -508,6 +557,26 @@ class DevelopModule(ModuleView):
         self._save_timer.start()
 
     # -- crop tool ---------------------------------------------------------- #
+
+    def _set_crop(self, active: bool) -> None:
+        """Drive the crop tool from a keyboard shortcut (R/T enter, V exits)."""
+        if self._renderer is None and active:
+            return
+        self._footer.set_crop_active(active)  # flips the footer toggle → _on_crop_toggled
+
+    def _on_crop_reset(self) -> None:
+        """Reset the crop to the full frame (handles, straighten, 90° rotation)."""
+        if self._renderer is None:
+            return
+        self._stack.geometry = Geometry()
+        self._footer.set_straighten(0.0)
+        self._canvas.set_crop_mode(self._footer.crop_active, (0.0, 0.0, 1.0, 1.0), 0.0)
+        if self._footer.crop_active:
+            self._render_crop_view()
+        else:
+            self._recompute_before()
+            self._render_full()
+        self._persist()
 
     def _on_crop_toggled(self, active: bool) -> None:
         """Enter/leave the on-canvas crop tool."""
@@ -681,24 +750,64 @@ class DevelopModule(ModuleView):
             self._store.save(self._photo.id, self._stack)
 
     def _recompute_before(self) -> None:
-        """Rebuild the Before reference (identity develop of the geometry-applied base)."""
+        """Rebuild the Before reference (identity develop of the geometry-applied base).
+
+        Runs on the load pool (never cleared, unlike the render queue): a ~300 ms
+        full-size identity develop would otherwise stall the UI on every undo, crop
+        exit, or 90° rotate. Until the new frame lands, the previous Before stays —
+        a brief, visual-only staleness. A generation counter drops superseded runs.
+        """
         if self._renderer is None:
             return
-        geo_base = apply_geometry(self._renderer.base, self._stack.geometry)
-        self._before_buffer = PipelineRenderer(geo_base).render(EditState())
-        self._before_qimage = ndarray_to_qimage(self._before_buffer.to_uint8())
+        self._before_gen += 1
+        task = _BeforeTask(
+            self._renderer.base,
+            self._stack.geometry.copy(),
+            self._before_gen,
+            self._render_signals,
+        )
+        self._load_pool.start(task)
+
+    def _on_before_ready(self, generation: int, buffer: object, qimage: object) -> None:
+        if generation != self._before_gen:
+            return  # superseded by a newer geometry change
+        if isinstance(buffer, ImageBuffer) and isinstance(qimage, QImage):
+            self._before_buffer = buffer
+            self._before_qimage = qimage
+            self._canvas.set_before(qimage)  # refresh if the Before view is showing
 
     def _sync_panel(self) -> None:
         self._panel.set_state(self._state)
         self._panel.set_layers(self._stack)
-        self._panel.crop_panel.set_geometry(self._stack.geometry)
         self._panel.mask_panel.set_masks(self._stack.active_layer.masks)
 
     def _render_full(self) -> None:
-        """Render the full-size preview synchronously (one-off / discrete actions)."""
+        """Show the current edit: instant proxy feedback + a crisp render off-thread.
+
+        Nothing full-resolution ever runs on the UI thread for large photos — the
+        proxy gives immediate feedback and the full frame lands from the pool. Small
+        photos (no proxy) render synchronously; at that size the full render *is*
+        real-time, and skipping the pool keeps the renderer single-threaded.
+        """
         if self._renderer is None or self._before_qimage is None:
             return
-        self._render_timer.stop()  # a pending proxy render is now redundant
+        if self._proxy_renderer is None:
+            self._render_sync_small()
+            return
+        self._render_preview()
+        self._request_full_async()
+
+    def _render_sync_small(self) -> None:
+        """Full render on the UI thread — only for small (proxy-less) photos.
+
+        This is the *only* place the full-res renderer runs on the UI thread, and it
+        happens only when no proxy exists — in which case no pool render tasks are
+        ever created, so the renderer's memoization cache stays single-threaded.
+        """
+        if self._renderer is None or self._before_qimage is None:
+            return
+        self._render_timer.stop()
+        self._full_timer.stop()
         self._render_gen += 1  # supersede any in-flight background render
         pixels = self._renderer.render(self._stack).to_uint8()
         self._canvas.set_images(ndarray_to_qimage(pixels), self._before_qimage)
@@ -710,10 +819,15 @@ class DevelopModule(ModuleView):
         """Render the current edit at full quality on a pool thread (coalesced).
 
         The live proxy already shows the edit; this lands the crisp full-resolution
-        frame without blocking the UI. A newer edit bumps the generation, so any
-        in-flight render that finishes late is ignored.
+        frame without blocking the UI. The persistent :class:`LayerRenderer` keeps
+        its per-stage memoization across renders, so a settled slider drag
+        recomputes only the stages downstream of the change even at full size. A
+        newer edit bumps the generation, so a render that finishes late is ignored.
         """
         if self._renderer is None or self._before_qimage is None:
+            return
+        if self._proxy_renderer is None:
+            self._render_sync_small()
             return
         self._render_timer.stop()
         self._render_gen += 1
@@ -721,7 +835,7 @@ class DevelopModule(ModuleView):
         self._busy_changed()
         self._render_pool.clear()  # drop superseded *queued* tasks (running one finishes)
         task = _FullRenderTask(
-            self._renderer.base, self._stack.copy(), self._render_gen, self._render_signals
+            self._renderer, self._stack.copy(), self._render_gen, self._render_signals
         )
         self._render_pool.start(task)
 
@@ -743,7 +857,7 @@ class DevelopModule(ModuleView):
     def _render_preview(self) -> None:
         """Render the fast low-res proxy for live feedback while editing."""
         if self._proxy_renderer is None:
-            self._render_full()  # small images skip the proxy — full is already fast
+            self._render_sync_small()  # small images skip the proxy — full is already fast
             return
         if self._before_qimage is None:
             return
@@ -766,6 +880,8 @@ class DevelopModule(ModuleView):
 
     def _set_unavailable(self, message: str) -> None:
         self._render_gen += 1  # invalidate in-flight renders
+        self._load_gen += 1  # and any in-flight photo load
+        self._before_gen += 1  # and any in-flight Before recompute
         self._render_pool.clear()
         self._render_busy = False
         self._renderer = None
@@ -780,24 +896,27 @@ class DevelopModule(ModuleView):
 
 
 class _RenderSignals(QObject):
-    """Carries a finished background render back to the UI thread."""
+    """Carries finished background work back to the UI thread."""
 
     done = Signal(int, object, object)  # (generation, QImage, uint8 pixels)
+    loaded = Signal(int, object)  # (load generation, _LoadedPhoto | None)
+    before_ready = Signal(int, object, object)  # (before generation, ImageBuffer, QImage)
 
 
 class _FullRenderTask(QRunnable):
     """Renders the full-quality frame off the UI thread (NumPy drops the GIL).
 
-    Reads only the immutable base buffer and a private copy of the stack, so it
-    shares no mutable state with the UI — safe to run on a pool thread. The
+    Uses the module's *persistent* full-res renderer so per-stage memoization
+    survives across renders — but only ever from the single-threaded pool, and with
+    a private copy of the stack, so no mutable state is shared with the UI. The
     ``generation`` lets the UI ignore results superseded by a newer edit.
     """
 
     def __init__(
-        self, base: ImageBuffer, stack: LayerStack, generation: int, signals: _RenderSignals
+        self, renderer: LayerRenderer, stack: LayerStack, generation: int, signals: _RenderSignals
     ) -> None:
         super().__init__()
-        self._base = base
+        self._renderer = renderer
         self._stack = stack
         self._generation = generation
         self._signals = signals
@@ -805,12 +924,126 @@ class _FullRenderTask(QRunnable):
 
     def run(self) -> None:
         try:
-            buffer = render_stack(self._base, self._stack)
+            buffer = self._renderer.render(self._stack)
             pixels = buffer.to_uint8()
             self._signals.done.emit(self._generation, ndarray_to_qimage(pixels), pixels)
         except Exception:
             logger.exception("Background render failed")
             self._signals.done.emit(self._generation, None, None)  # clears the busy state
+
+
+class _BeforeTask(QRunnable):
+    """Recomputes the Before reference (geometry + identity develop) off-thread.
+
+    Runs on the (never-cleared) load pool so it cannot be dropped by the render
+    queue's coalescing; reads only the immutable base and a private geometry copy.
+    """
+
+    def __init__(
+        self,
+        base: ImageBuffer,
+        geometry: Geometry,
+        generation: int,
+        signals: _RenderSignals,
+    ) -> None:
+        super().__init__()
+        self._base = base
+        self._geometry = geometry
+        self._generation = generation
+        self._signals = signals
+        self.setAutoDelete(True)
+
+    def run(self) -> None:
+        try:
+            geo_base = apply_geometry(self._base, self._geometry)
+            before = PipelineRenderer(geo_base).render(EditState())
+            self._signals.before_ready.emit(
+                self._generation, before, ndarray_to_qimage(before.to_uint8())
+            )
+        except Exception:
+            logger.exception("Before-reference render failed")
+
+
+class _LoadedPhoto:
+    """Everything a photo needs to start editing, computed off the UI thread."""
+
+    __slots__ = (
+        "as_shot_kelvin",
+        "before_buffer",
+        "before_qimage",
+        "preview_base",
+        "proxy_renderer",
+        "renderer",
+    )
+
+    def __init__(
+        self,
+        renderer: LayerRenderer,
+        proxy_renderer: LayerRenderer | None,
+        before_buffer: ImageBuffer,
+        before_qimage: QImage,
+        preview_base: ImageBuffer,
+        as_shot_kelvin: float | None,
+    ) -> None:
+        self.renderer = renderer
+        self.proxy_renderer = proxy_renderer
+        self.before_buffer = before_buffer
+        self.before_qimage = before_qimage
+        self.preview_base = preview_base
+        self.as_shot_kelvin = as_shot_kelvin
+
+
+class _LoadTask(QRunnable):
+    """Decodes a photo and prepares its renderers/reference images off-thread.
+
+    RAW decode takes seconds; doing it here (plus the identity "Before" render and
+    the proxy/preview downscales) keeps photo switching stutter-free. Emits
+    ``loaded`` with a :class:`_LoadedPhoto`, or ``None`` when the decode failed.
+    """
+
+    def __init__(
+        self,
+        engine: DevelopEngine,
+        raw_service: RawService,
+        path: Path,
+        is_raw: bool,
+        geometry: Geometry,
+        generation: int,
+        signals: _RenderSignals,
+    ) -> None:
+        super().__init__()
+        self._engine = engine
+        self._raw_service = raw_service
+        self._path = path
+        self._is_raw = is_raw
+        self._geometry = geometry
+        self._generation = generation
+        self._signals = signals
+        self.setAutoDelete(True)
+
+    def run(self) -> None:
+        try:
+            renderer = self._engine.open_layered(self._path, is_raw=self._is_raw)
+            if renderer is None:
+                self._signals.loaded.emit(self._generation, None)
+                return
+            proxy = _make_proxy(renderer.base, _PROXY_EDGE)
+            geo_base = apply_geometry(renderer.base, self._geometry)
+            before = PipelineRenderer(geo_base).render(EditState())
+            payload = _LoadedPhoto(
+                renderer=renderer,
+                proxy_renderer=proxy,
+                before_buffer=before,
+                before_qimage=ndarray_to_qimage(before.to_uint8()),
+                preview_base=downscale_buffer(renderer.base, _PREVIEW_EDGE),
+                as_shot_kelvin=(
+                    self._raw_service.as_shot_temperature(self._path) if self._is_raw else None
+                ),
+            )
+            self._signals.loaded.emit(self._generation, payload)
+        except Exception:
+            logger.exception("Background photo load failed")
+            self._signals.loaded.emit(self._generation, None)
 
 
 class _PanelResizer(QWidget):

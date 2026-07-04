@@ -1,12 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for the Vibe Photo desktop app (one-folder Windows bundle).
+"""PyInstaller spec for the Vibe Photo desktop app (one-folder bundle, all platforms).
 
 Build via ``python scripts/build_exe.py`` (or ``pyinstaller packaging/VibePhoto.spec``).
 Bundles the ``vibephoto`` package data (theme QSS), the rawpy/LibRaw native
 binaries, and excludes the heavy Qt modules Vibe Photo never uses to keep the
-bundle smaller.
+bundle smaller. On macOS a ``VibePhoto.app`` bundle is additionally produced.
 """
 
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
@@ -52,7 +53,7 @@ a = Analysis(  # noqa: F821 - Analysis injected by PyInstaller
     pathex=[str(_ROOT / "src")],
     binaries=binaries,
     datas=datas,
-    hiddenimports=["rawpy"],
+    hiddenimports=["rawpy", "cv2"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -102,3 +103,15 @@ coll = COLLECT(  # noqa: F821
     upx=False,
     name="VibePhoto",
 )
+
+if sys.platform == "darwin":
+    app = BUNDLE(  # noqa: F821 - BUNDLE injected by PyInstaller (macOS only)
+        coll,
+        name="VibePhoto.app",
+        icon=None,
+        bundle_identifier="com.vibephoto.app",
+        info_plist={
+            "NSHighResolutionCapable": True,
+            "LSMinimumSystemVersion": "12.0",
+        },
+    )

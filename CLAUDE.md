@@ -31,12 +31,17 @@ the shipped installer drift behind the code.
   It is ~47 MB — if git history bloat becomes a problem, move it to Git LFS or a
   GitHub Release. `dist/` and the one-folder bundle stay git-ignored.
 - Missing build tooling? `pip install -e .[build]` first.
+- **macOS/Linux packages cannot be built on this machine** (PyInstaller doesn't
+  cross-compile). They are built by `.github/workflows/release.yml` when a `v*`
+  tag is pushed: the workflow tests, then builds the Windows installer, a macOS
+  `.app` zip, and a Linux tarball, and attaches all three to the GitHub Release.
+  Release steps are documented in the README ("Releasing").
 
 ## Environment & commands
 
 - Python 3.12, venv at `.venv` (Windows). Activate: `.venv\Scripts\activate`.
 - Run the app: `vibephoto` (GUI) or `vibephoto --headless`.
-- Install everything: `pip install -e .[ui,raw,dev,build]`.
+- Install everything: `pip install -e .[ui,raw,cv,dev,build]`.
 - Tests: `pytest` (set `QT_QPA_PLATFORM=offscreen` for the GUI tests on a
   headless machine). RAW + Develop integration tests need the `raw` extra.
 - Lint/format: `ruff check src tests`. Types: `mypy` (strict).

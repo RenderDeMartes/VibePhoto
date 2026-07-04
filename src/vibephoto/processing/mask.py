@@ -99,17 +99,29 @@ class Mask:
         return _smoothstep(t)
 
     def _brush(self, height: int, width: int) -> Array:
-        xx, yy = _grid(height, width)
+        """Each dab touches only its bounding box — a stroke of hundreds of dabs
+        stays cheap instead of costing a full-frame pass per dab."""
         cov = np.zeros((height, width), dtype=np.float32)
         feather = max(1e-3, float(self.feather))
+        ys = (np.arange(height, dtype=np.float32) + 0.5) / height
+        xs = (np.arange(width, dtype=np.float32) + 0.5) / width
         for dab in self.params.get("dabs", []):
             vals = list(dab)
             x, y, radius = float(vals[0]), float(vals[1]), max(1e-4, float(vals[2]))
             value = float(vals[3]) if len(vals) > 3 else 1.0
-            dist = np.sqrt((xx - x) ** 2 + (yy - y) ** 2) / radius
-            cov = np.maximum(cov, value * _smoothstep((1.0 - dist) / feather))
-        out: Array = cov.astype(np.float32)
-        return out
+            # A dab's coverage is zero beyond dist = 1 (radius), i.e. `radius` away.
+            x0 = max(0, int((x - radius) * width) - 1)
+            x1 = min(width, int((x + radius) * width) + 2)
+            y0 = max(0, int((y - radius) * height) - 1)
+            y1 = min(height, int((y + radius) * height) + 2)
+            if x0 >= x1 or y0 >= y1:
+                continue
+            dx = (xs[x0:x1] - x)[None, :]
+            dy = (ys[y0:y1] - y)[:, None]
+            dist = np.sqrt(dx * dx + dy * dy) / radius
+            patch = value * _smoothstep((1.0 - dist) / feather)
+            np.maximum(cov[y0:y1, x0:x1], patch, out=cov[y0:y1, x0:x1])
+        return cov
 
     # -- serialisation ------------------------------------------------------ #
 
